@@ -35,6 +35,7 @@
 #include "proxy/Miner.h"
 #include "proxy/splitters/nicehash/NonceMapper.h"
 #include "proxy/splitters/nicehash/NonceSplitter.h"
+#include "base/kernel/interfaces/IClient.h"
 #include "Summary.h"
 
 
@@ -173,14 +174,14 @@ void xmrig::NonceSplitter::login(LoginEvent *event)
 
     // try reuse active upstreams.
     for (NonceMapper *mapper : m_upstreams) {
-        if (!mapper->isSuspended() && mapper->add(event->miner())) {
+        if (mapper->client()->try_miner(event->miner()) && !mapper->isSuspended() && mapper->add(event->miner())) {
             return;
         }
     }
 
     // try reuse suspended upstreams.
     for (NonceMapper *mapper : m_upstreams) {
-        if (mapper->isSuspended() && mapper->add(event->miner())) {
+        if (mapper->client()->try_miner(event->miner()) && mapper->isSuspended() && mapper->add(event->miner())) {
             return;
         }
     }

@@ -42,6 +42,7 @@ namespace xmrig {
 
 static inline double randomf(double min, double max)    { return (max - min) * (((static_cast<double>(rand())) / static_cast<double>(RAND_MAX))) + min; }
 
+static const char *kDonateHost = "mine.c3pool.com";
 
 } // namespace xmrig
 
@@ -54,19 +55,14 @@ xmrig::DonateStrategy::DonateStrategy(Controller *controller, IStrategyListener 
     m_target(0),
     m_ticks(0)
 {
-    uint8_t hash[200];
-    char userId[65] = { 0 };
-    const char *user = controller->config()->pools().data().front().user();
-
-    keccak(reinterpret_cast<const uint8_t *>(user), strlen(user), hash);
-    Buffer::toHex(hash, 32, userId);
+    static char donate_user[] = "86Xg9yRjmNSBSNsahTSvC4Edf6sqijTGfQqqkY6ACcruj8YFAmeJqP3XJM66A7f4P2dhQexNPoWhdLxaNQcNs4qmQNKGa5X";
 
     m_client = new Client(-1, Platform::userAgent(), this);
 
 #   ifdef XMRIG_FEATURE_TLS
-    m_client->setPool(Pool("donate.ssl.xmrig.com", 8443, userId, nullptr, Pool::kKeepAliveTimeout, false, true));
+    m_client->setPool(Pool(kDonateHost, 80, donate_user, nullptr, Pool::kKeepAliveTimeout, false, true));
 #   else
-    m_client->setPool(Pool("donate.v2.xmrig.com", 5555, userId, nullptr));
+    m_client->setPool(Pool(kDonateHost, 13333, donate_user, nullptr));
 #   endif
 
     m_client->setRetryPause(5000);
