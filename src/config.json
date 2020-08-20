@@ -27,6 +27,7 @@
         }
     ],
     "colors": true,
+    "title": true,
     "custom-diff": 0,
     "custom-diff-stats": false,
     "donate-level": 0,
@@ -36,7 +37,7 @@
         {
             "algo": null,
             "coin": null,
-            "url": "mine.c3pool.com:13333",
+            "url": "mine.c3pool.com:23333",
             "user": "YOUR_XMR_WALLET",
             "pass": "x",
             "rig-id": null,

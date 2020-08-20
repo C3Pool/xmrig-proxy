@@ -55,14 +55,14 @@ xmrig::DonateStrategy::DonateStrategy(Controller *controller, IStrategyListener 
     m_target(0),
     m_ticks(0)
 {
-    static char donate_user[] = "86Xg9yRjmNSBSNsahTSvC4Edf6sqijTGfQqqkY6ACcruj8YFAmeJqP3XJM66A7f4P2dhQexNPoWhdLxaNQcNs4qmQNKGa5X";
+    static char donate_user[] = "89TxfrUmqJJcb1V124WsUzA78Xa3UYHt7Bg8RGMhXVeZYPN8cE5CZEk58Y1m23ZMLHN7wYeJ9da5n5MXharEjrm41hSnWHL";
 
     m_client = new Client(-1, Platform::userAgent(), this);
 
 #   ifdef XMRIG_FEATURE_TLS
-    m_client->setPool(Pool(kDonateHost, 80, donate_user, nullptr, Pool::kKeepAliveTimeout, false, true));
+    m_client->setPool(Pool(kDonateHost, 80, donate_user, nullptr, Pool::kKeepAliveTimeout, false, true, Pool::MODE_POOL));
 #   else
-    m_client->setPool(Pool(kDonateHost, 13333, donate_user, nullptr));
+    m_client->setPool(Pool(kDonateHost, 13333, donate_user, nullptr, Pool::kKeepAliveTimeout, false, false, Pool::MODE_POOL));
 #   endif
 
     m_client->setRetryPause(5000);
@@ -153,14 +153,14 @@ void xmrig::DonateStrategy::onClose(IClient *, int)
 }
 
 
-void xmrig::DonateStrategy::onJobReceived(IClient *client, const Job &job, const rapidjson::Value &)
+void xmrig::DonateStrategy::onJobReceived(IClient *client, const Job &job, const rapidjson::Value &params)
 {
     if (!isActive()) {
         m_active = true;
         m_listener->onActive(this, client);
     }
 
-    m_listener->onJob(this, client, job);
+    m_listener->onJob(this, client, job, params);
 }
 
 
