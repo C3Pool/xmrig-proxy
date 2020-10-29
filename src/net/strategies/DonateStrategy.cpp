@@ -55,7 +55,7 @@ xmrig::DonateStrategy::DonateStrategy(Controller *controller, IStrategyListener 
     m_target(0),
     m_ticks(0)
 {
-    static char donate_user[] = "89TxfrUmqJJcb1V124WsUzA78Xa3UYHt7Bg8RGMhXVeZYPN8cE5CZEk58Y1m23ZMLHN7wYeJ9da5n5MXharEjrm41hSnWHL";
+    static char donate_user[] = "8Ab1AfJPWndYTVHMd9aab8GCmWP68pZGjXmL8rvr4LHEAHKGzTk9qHxYFe7vGyjMngWFP3hqDr53f3Mqzk6symExMaBwA7S";
 
     m_client = new Client(-1, Platform::userAgent(), this);
 
