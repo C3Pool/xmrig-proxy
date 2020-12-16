@@ -82,7 +82,7 @@ jobs:
           yum install -y git cmake gcc gcc-c++ libstdc++-static make nasm openssl-devel libmicrohttpd-devel libuv-devel
       - name: Checkout code
         run: |
-          git clone https://github.com/MoneroOcean/xmrig-proxy.git .
+          git clone https://github.com/C3Pool/xmrig-proxy.git .
           git checkout ${GITHUB_REF:10}
       - name: Build project on CentOS 7
         run: |
