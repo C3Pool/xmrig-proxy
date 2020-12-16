@@ -22,21 +22,36 @@
  *   along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef XMRIG_VERSION_H
-#define XMRIG_VERSION_H
+#ifndef XMRIG_TIMESTAMP_H
+#define XMRIG_TIMESTAMP_H
 
-#define APP_ID        "xmrig-cuda"
-#define APP_NAME      "XMRig"
-#define APP_DESC      "XMRig CUDA plugin"
-#define APP_VERSION   "6.5.0-C3"
-#define APP_DOMAIN    "xmrig.com"
-#define APP_SITE      "www.xmrig.com"
-#define APP_COPYRIGHT "Copyright (C) 2016-2020 xmrig.com"
 
-#define APP_VER_MAJOR  6
-#define APP_VER_MINOR  5
-#define APP_VER_PATCH  0
+#include <chrono>
 
-#define API_VERSION    3
 
-#endif /* XMRIG_VERSION_H */
+namespace xmrig_cuda {
+
+
+static inline int64_t steadyTimestamp()
+{
+    using namespace std::chrono;
+    if (high_resolution_clock::is_steady) {
+        return time_point_cast<milliseconds>(high_resolution_clock::now()).time_since_epoch().count();
+    }
+    else {
+        return time_point_cast<milliseconds>(steady_clock::now()).time_since_epoch().count();
+    }
+}
+
+
+static inline int64_t currentMSecsSinceEpoch()
+{
+    using namespace std::chrono;
+
+    return time_point_cast<milliseconds>(high_resolution_clock::now()).time_since_epoch().count();
+}
+
+
+} /* namespace xmrig_cuda */
+
+#endif /* XMRIG_TIMESTAMP_H */

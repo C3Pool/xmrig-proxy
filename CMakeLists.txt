@@ -1,189 +1,113 @@
 cmake_minimum_required(VERSION 2.8)
-project(xmrig-proxy)
+project(xmrig-cuda)
+include(cmake/CUDA-Version.cmake)
 
 
-option(WITH_GOOGLE_BREAKPAD "Use Google Breakpad"     OFF)
-option(WITH_DEBUG_LOG       "Enable debug log output" OFF)
-option(WITH_HTTP            "HTTP protocol support (client/server)" ON)
-option(WITH_TLS             "Enable OpenSSL support"  ON)
-option(WITH_ENV_VARS        "Enable environment variables support in config file" ON)
+option(WITH_DRIVER_API "Enable CUDA Driver API and NVRTC, required for cn/r and kawpow algorithms" ON)
 
+# Algorithm selection
+option(WITH_CN_R       "Enable CryptoNight-R algorithm" ON)
+option(WITH_CN_LITE    "Enable CryptoNight-Lite algorithms family" ON)
+option(WITH_CN_HEAVY   "Enable CryptoNight-Heavy algorithms family" ON)
+option(WITH_CN_PICO    "Enable CryptoNight-Pico algorithm" ON)
+option(WITH_CN_GPU      "Enable CryptoNight-GPU algorithm" ON)
+option(WITH_ARGON2     "Enable Argon2 algorithms family" OFF) #unsupported
 
-include (CheckIncludeFile)
-include (cmake/os.cmake)
-include (src/base/base.cmake)
-
-
-set(HEADERS
-    "${HEADERS_BASE}"
-    "${HEADERS_BASE_HTTP}"
-    src/App.h
-    src/core/config/Config_platform.h
-    src/core/config/Config.h
-    src/core/config/ConfigTransform.h
-    src/core/config/usage.h
-    src/core/Controller.h
-    src/donate.h
-    src/net/JobResult.h
-    src/net/strategies/DonateStrategy.h
-    src/proxy/BindHost.h
-    src/proxy/Counters.h
-    src/proxy/CustomDiff.h
-    src/proxy/Error.h
-    src/proxy/Events.h
-    src/proxy/events/AcceptEvent.h
-    src/proxy/events/CloseEvent.h
-    src/proxy/events/ConnectionEvent.h
-    src/proxy/events/Event.h
-    src/proxy/events/LoginEvent.h
-    src/proxy/events/MinerEvent.h
-    src/proxy/events/SubmitEvent.h
-    src/proxy/interfaces/IEvent.h
-    src/proxy/interfaces/IEventListener.h
-    src/proxy/interfaces/ISplitter.h
-    src/proxy/log/AccessLog.h
-    src/proxy/log/ShareLog.h
-    src/proxy/Login.h
-    src/proxy/Miner.h
-    src/proxy/Miners.h
-    src/proxy/Proxy.h
-    src/proxy/ProxyDebug.h
-    src/proxy/Server.h
-    src/proxy/splitters/donate/DonateMapper.h
-    src/proxy/splitters/donate/DonateSplitter.h
-    src/proxy/splitters/nicehash/NonceMapper.h
-    src/proxy/splitters/nicehash/NonceSplitter.h
-    src/proxy/splitters/nicehash/NonceStorage.h
-    src/proxy/splitters/simple/SimpleMapper.h
-    src/proxy/splitters/simple/SimpleSplitter.h
-    src/proxy/splitters/Splitter.h
-    src/proxy/Stats.h
-    src/proxy/StatsData.h
-    src/proxy/TickingCounter.h
-    src/proxy/workers/Worker.h
-    src/proxy/workers/Workers.h
-    src/Summary.h
-    src/version.h
-   )
-
-set(SOURCES
-    "${SOURCES_BASE}"
-    "${SOURCES_BASE_HTTP}"
-    src/App.cpp
-    src/core/config/Config.cpp
-    src/core/config/ConfigTransform.cpp
-    src/core/Controller.cpp
-    src/net/JobResult.cpp
-    src/net/strategies/DonateStrategy.cpp
-    src/proxy/BindHost.cpp
-    src/proxy/Counters.cpp
-    src/proxy/CustomDiff.cpp
-    src/proxy/Error.cpp
-    src/proxy/Events.cpp
-    src/proxy/events/ConnectionEvent.h
-    src/proxy/events/Event.cpp
-    src/proxy/events/MinerEvent.cpp
-    src/proxy/log/AccessLog.cpp
-    src/proxy/log/ShareLog.cpp
-    src/proxy/Login.cpp
-    src/proxy/Miner.cpp
-    src/proxy/Miners.cpp
-    src/proxy/Proxy.cpp
-    src/proxy/ProxyDebug.cpp
-    src/proxy/Server.cpp
-    src/proxy/splitters/donate/DonateMapper.cpp
-    src/proxy/splitters/donate/DonateSplitter.cpp
-    src/proxy/splitters/nicehash/NonceMapper.cpp
-    src/proxy/splitters/nicehash/NonceSplitter.cpp
-    src/proxy/splitters/nicehash/NonceStorage.cpp
-    src/proxy/splitters/simple/SimpleMapper.cpp
-    src/proxy/splitters/simple/SimpleSplitter.cpp
-    src/proxy/splitters/Splitter.cpp
-    src/proxy/Stats.cpp
-    src/proxy/workers/Worker.cpp
-    src/proxy/workers/Workers.cpp
-    src/Summary.cpp
-    src/xmrig.cpp
-   )
-
-if (WIN32)
-    set(SOURCES_OS
-        "${SOURCES_OS}"
-        res/app.rc
-        src/App_win.cpp
-        )
-
-    add_definitions(/DWIN32)
-    set(EXTRA_LIBS ws2_32 psapi iphlpapi userenv)
-elseif (APPLE)
-    set(SOURCES_OS
-        "${SOURCES_OS}"
-        src/App_unix.cpp
-        )
-
-    find_library(CFLIB CoreFoundation)
-    set(EXTRA_LIBS ${CFLIB})
+if (CUDA_VERSION VERSION_LESS 9.0)
+    message(STATUS "CUDA ${CUDA_VERSION}: RandomX, AstroBWT, and KawPow disabled, they do not work with old CUDA")
+    option(WITH_RANDOMX  "Enable RandomX algorithms family" OFF)
+    option(WITH_ASTROBWT "Enable AstroBWT algorithms family" OFF)
+    option(WITH_KAWPOW   "Enable KawPow algorithms family" OFF)
 else()
-    set(SOURCES_OS
-        "${SOURCES_OS}"
-        src/App_unix.cpp
-        )
+    option(WITH_RANDOMX  "Enable RandomX algorithms family" ON)
+    option(WITH_ASTROBWT "Enable AstroBWT algorithms family" ON)
+    option(WITH_KAWPOW   "Enable KawPow algorithms family" ON)
+endif()
 
-    if (CMAKE_SYSTEM_NAME STREQUAL FreeBSD)
-        set(EXTRA_LIBS pthread)
+if (WITH_CN_LITE)
+    add_definitions(/DXMRIG_ALGO_CN_LITE)
+endif()
+
+if (WITH_CN_HEAVY)
+    add_definitions(/DXMRIG_ALGO_CN_HEAVY)
+endif()
+
+if (WITH_CN_PICO)
+    add_definitions(/DXMRIG_ALGO_CN_PICO)
+endif()
+
+if (WITH_CN_GPU)
+    add_definitions(/DXMRIG_ALGO_CN_GPU)
+endif()
+
+if (WITH_RANDOMX)
+    add_definitions(/DXMRIG_ALGO_RANDOMX)
+endif()
+
+if (WITH_ARGON2)
+    add_definitions(/DXMRIG_ALGO_ARGON2)
+endif()
+
+if (WITH_ASTROBWT)
+    add_definitions(/DXMRIG_ALGO_ASTROBWT)
+endif()
+
+if (WITH_KAWPOW)
+    if (WITH_DRIVER_API)
+        add_definitions(/DXMRIG_ALGO_KAWPOW)
     else()
-        set(EXTRA_LIBS pthread rt dl)
+        set(WITH_KAWPOW OFF)
+        message(STATUS "CUDA ${CUDA_VERSION}: KawPow disabled, requires WITH_DRIVER_API=ON for CUDA Driver API and NVRTC")
     endif()
 endif()
 
-add_definitions(/DXMRIG_PROXY_PROJECT /DXMRIG_FORCE_TLS)
-add_definitions(/DUNICODE)
-add_definitions(/D__STDC_FORMAT_MACROS)
-add_definitions(/DAPP_DEVEL)
-add_definitions(/DXMRIG_NO_ASM)
-
-add_definitions(/DXMRIG_ALGO_RANDOMX)
-add_definitions(/DXMRIG_ALGO_CN_LITE)
-add_definitions(/DXMRIG_ALGO_CN_HEAVY)
-add_definitions(/DXMRIG_ALGO_CN_PICO)
-add_definitions(/DXMRIG_ALGO_CN_GPU)
-add_definitions(/DXMRIG_ALGO_ARGON2)
-add_definitions(/DXMRIG_ALGO_ASTROBWT)
-
-if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
-    add_definitions(/DRAPIDJSON_SSE2)
+if (WITH_CN_R)
+    if (WITH_DRIVER_API)
+        add_definitions(/DXMRIG_ALGO_CN_R)
+    else()
+        set(WITH_CN_R OFF)
+        message(STATUS "CUDA ${CUDA_VERSION}: CryptoNight-R disabled, requires WITH_DRIVER_API=ON for CUDA Driver API and NVRTC")
+    endif()
 endif()
 
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake")
-
-find_package(UV REQUIRED)
-
-include(cmake/flags.cmake)
-include(cmake/OpenSSL.cmake)
-
-if (WITH_GOOGLE_BREAKPAD)
-    include_directories(/usr/local/include/breakpad)
-    set(GOOGLE_BREAKPAD_LIBS breakpad_client)
-else()
-    add_definitions(/DXMRIG_NO_GOOGLE_BREAKPAD)
-endif()
-
-if (WITH_HTTP)
-    set(HTTP_SOURCES
-        src/api/v1/ApiRouter.cpp
-        src/api/v1/ApiRouter.h
-        )
-else()
-    set(HTTP_SOURCES "")
-endif()
-
-if (WITH_DEBUG_LOG)
-    add_definitions(/DAPP_DEBUG)
-endif()
 
 include_directories(src)
-include_directories(src/3rdparty)
-include_directories(${UV_INCLUDE_DIR})
+add_definitions(/DCUB_IGNORE_DEPRECATED_CPP_DIALECT)
 
-add_executable(${CMAKE_PROJECT_NAME} ${HEADERS} ${SOURCES} ${SOURCES_OS} ${SOURCES_SYSLOG} ${HTTP_SOURCES} ${TLS_SOURCES})
-target_link_libraries(${CMAKE_PROJECT_NAME} ${OPENSSL_LIBRARIES} ${UV_LIBRARIES} ${EXTRA_LIBS} ${GOOGLE_BREAKPAD_LIBS})
+
+include(cmake/cpu.cmake)
+include(cmake/os.cmake)
+include(cmake/flags.cmake)
+include(cmake/CUDA.cmake)
+
+
+set(SOURCES
+    src/crypto/cn/c_blake256.c
+    src/crypto/common/Algorithm.cpp
+    src/crypto/common/Algorithm.h
+    src/version.h
+    src/xmrig-cuda.cpp
+    src/xmrig-cuda.h
+    )
+
+
+if (WITH_DRIVER_API AND WITH_CN_R)
+    list(APPEND SOURCES src/CudaCryptonightR_gen.cpp)
+endif()
+
+if (XMRIG_OS_WIN)
+    list(APPEND SOURCES res/app.rc)
+endif()
+
+add_library(${CMAKE_PROJECT_NAME} SHARED ${SOURCES})
+target_link_libraries(${CMAKE_PROJECT_NAME} xmrig-cu ${LIBS})
+
+if (WITH_DRIVER_API AND WIN32)
+    file(GLOB NVRTCDLL "${CUDA_TOOLKIT_ROOT_DIR}/bin/nvrtc64*.dll")
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NVRTCDLL}" $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>)
+
+    file(GLOB NVRTCBUILTINDLL "${CUDA_TOOLKIT_ROOT_DIR}/bin/nvrtc-builtins64*.dll")
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NVRTCBUILTINDLL}" $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>)
+endif()
