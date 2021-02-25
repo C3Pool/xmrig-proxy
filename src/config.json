@@ -41,7 +41,7 @@
             "user": "YOUR_XMR_WALLET",
             "pass": "x",
             "rig-id": null,
-            "keepalive": false,
+            "keepalive": true,
             "enabled": true,
             "tls": false,
             "tls-fingerprint": null,
@@ -51,6 +51,7 @@
     "retries": 2,
     "retry-pause": 1,
     "reuse-timeout": 0,
+    "algo-perf-same-threshold": 20,
     "tls": {
         "enabled": true,
         "protocols": null,

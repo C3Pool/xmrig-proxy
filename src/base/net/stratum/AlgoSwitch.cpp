@@ -53,8 +53,8 @@ void AlgoSwitch::compute_common_miner_algo_perfs() {
   for (const auto& miner_algo_perf: m_miner_algo_perfs) {
     const Algorithms& algos = miner_algo_perf.second.first;
     const algo_perfs& algo_perfs = miner_algo_perf.second.second;
-    m_algos = intersection(m_algos, algos);
-    m_algo_perfs = intersection(m_algo_perfs, algo_perfs);
+    m_algos      = m_algos.empty()      ? algos      : intersection(m_algos, algos);
+    m_algo_perfs = m_algo_perfs.empty() ? algo_perfs : intersection(m_algo_perfs, algo_perfs);
   }
 }
 
@@ -88,6 +88,10 @@ rapidjson::Value AlgoSwitch::algo_perfs_toJSON(rapidjson::Document& doc) const {
   return algo_perfs;
 }
 
+void AlgoSwitch::set_algo_perf_same_threshold(uint64_t percent) {
+  m_percent = percent;
+}
+
 bool AlgoSwitch::try_miner(const Miner* miner) const {
   if (m_miner_algo_perfs.empty()) return true;
   // make sure algos are the same, if not return false
@@ -99,9 +103,12 @@ bool AlgoSwitch::try_miner(const Miner* miner) const {
   algo_perfs::const_iterator i2 = miner->get_algo_perfs().begin();
   for (; i1 != m_algo_perfs.end(); ++ i1, ++ i2) {
     assert(i1->first == i2->first);
-    if (i2->second == 0.0f) return false;
+    if (i2->second == 0.0f) {
+      if (i1->second == 0.0f) continue;
+      return false;
+    }
     const float ratio = i1->second / m_miner_algo_perfs.size() / i2->second;
-    if (ratio > 1.2f || ratio < 0.8f) return false;
+    if (ratio > (1.0f + (float)(m_percent) / 100.0f) || ratio < (1.0f - (float)(m_percent) / 100.0f)) return false;
   }
   return true;
 }
