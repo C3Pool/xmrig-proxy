@@ -70,10 +70,6 @@ static AlgoName const algorithm_names[] = {
     { "cryptonight/rwz",           "cn/rwz",           Algorithm::CN_RWZ          },
     { "cryptonight/zls",           "cn/zls",           Algorithm::CN_ZLS          },
     { "cryptonight/double",        "cn/double",        Algorithm::CN_DOUBLE       },
-#   ifdef XMRIG_ALGO_CN_GPU
-    { "cryptonight/gpu",           "cn/gpu",           Algorithm::CN_GPU          },
-    { "cryptonight_gpu",           nullptr,            Algorithm::CN_GPU          },
-#   endif
 #   ifdef XMRIG_ALGO_CN_LITE
     { "cryptonight-lite/0",        "cn-lite/0",        Algorithm::CN_LITE_0       },
     { "cryptonight-lite/1",        "cn-lite/1",        Algorithm::CN_LITE_1       },
@@ -115,6 +111,8 @@ static AlgoName const algorithm_names[] = {
     { "RandomSFX",                 nullptr,            Algorithm::RX_SFX          },
     { "randomx/keva",              "rx/keva",          Algorithm::RX_KEVA         },
     { "RandomKEVA",                nullptr,            Algorithm::RX_KEVA         },
+    { "panthera",                  "panthera",         Algorithm::RX_XLA        },
+    { "Panthera",                  "panthera",         Algorithm::RX_XLA        },
 #   endif
 #   ifdef XMRIG_ALGO_ARGON2
     { "argon2/chukwa",             nullptr,            Algorithm::AR2_CHUKWA      },
@@ -133,6 +131,10 @@ static AlgoName const algorithm_names[] = {
 #   endif
     { "cryptonight/ccx",           "cn/ccx",           Algorithm::CN_CCX          },
     { "cryptonight/conceal",       "cn/conceal",       Algorithm::CN_CCX          },
+#   ifdef XMRIG_ALGO_CN_GPU
+    { "cryptonight/gpu",           "cn/gpu",           Algorithm::CN_GPU          },
+    { "cryptonight_gpu",           nullptr,            Algorithm::CN_GPU          },
+#   endif
 };
 
 
@@ -169,6 +171,7 @@ size_t xmrig::Algorithm::l2() const
 
     case RX_WOW:
     case RX_KEVA:
+    case RX_XLA:
         return 0x20000;
 
     case RX_ARQ:
@@ -219,6 +222,7 @@ size_t xmrig::Algorithm::l3() const
             return oneMiB;
 
         case RX_ARQ:
+        case RX_XLA:
             return oneMiB / 4;
 
         default:
@@ -348,6 +352,7 @@ xmrig::Algorithm::Family xmrig::Algorithm::family(Id id)
     case RX_ARQ:
     case RX_SFX:
     case RX_KEVA:
+    case RX_XLA:
         return RANDOM_X;
 #   endif
 

@@ -50,7 +50,7 @@
 #include "base/net/dns/Dns.h"
 #include "base/net/stratum/Socks5.h"
 #include "base/net/tools/NetBuffer.h"
-#include "base/tools/Buffer.h"
+#include "base/tools/Cvt.h"
 #include "base/tools/Chrono.h"
 #include "net/JobResult.h"
 
@@ -202,11 +202,8 @@ int64_t xmrig::Client::submit(const JobResult &result)
     char *nonce = m_sendBuf.data();
     char *data  = m_sendBuf.data() + 16;
 
-    Buffer::toHex(reinterpret_cast<const char*>(&result.nonce), 4, nonce);
-    nonce[8] = '\0';
-
-    Buffer::toHex(result.result(), 32, data);
-    data[64] = '\0';
+    Cvt::toHex(nonce, sizeof(uint32_t) * 2 + 1, reinterpret_cast<const uint8_t *>(&result.nonce), sizeof(uint32_t));
+    Cvt::toHex(data, 65, result.result(), 32);
 #   endif
 
     Document doc(kObjectType);
@@ -677,8 +674,6 @@ void xmrig::Client::getjob()
     using namespace rapidjson;
 
     if (!m_rpcId) return;
-    if (m_getjob && m_getjob + 30*1000 < Chrono::steadyMSecs()) return;
-    m_getjob = Chrono::steadyMSecs();
 
     Document doc(kObjectType);
     auto &allocator = doc.GetAllocator();
@@ -832,7 +827,15 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
         const char *message = error["message"].GetString();
 
         if (!handleSubmitResponse(id, message) && !isQuiet()) {
-            LOG_ERR("%s " RED("error: ") RED_BOLD("\"%s\"") RED(", code: ") RED_BOLD("%d"), tag(), message, Json::getInt(error, "code"));
+            using namespace rapidjson;
+            Document doc(kObjectType);
+            StringBuffer buffer1(nullptr, 512), buffer2(nullptr, 512);
+            Writer<StringBuffer> writer1(buffer1), writer2(buffer2);
+            algos_toJSON(doc).Accept(writer1);
+            algo_perfs_toJSON(doc).Accept(writer2);
+
+            LOG_ERR("%s " RED("error: ") RED_BOLD("\"%s\"") RED(", code: ") RED_BOLD("%d") " with %s algo and %s algo_perf",
+                    tag(), message, Json::getInt(error, "code"), buffer1.GetString(), buffer2.GetString());
         }
 
         if (m_id == 1 || isCriticalError(message)) {
