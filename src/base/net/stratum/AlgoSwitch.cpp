@@ -96,7 +96,7 @@ void AlgoSwitch::set_algo_perf_same_threshold(uint64_t percent) {
   m_percent = percent;
 }
 
-bool AlgoSwitch::try_miner(const Miner* miner) const {
+bool AlgoSwitch::try_miner(const Miner* miner, const int upstream_count) const {
   if (m_miner_algo_perfs.empty()) return true;
   // make sure algos are the same, if not return false
   if (m_algos.size() != miner->get_algos().size() || intersection(m_algos, miner->get_algos()).size() < m_algos.size()) return false;
@@ -112,7 +112,7 @@ bool AlgoSwitch::try_miner(const Miner* miner) const {
       return false;
     }
     const float ratio = i1->second / m_miner_algo_perfs.size() / i2->second;
-    if (ratio > (1.0f + (float)(m_percent) / 100.0f) || ratio < (1.0f - (float)(m_percent) / 100.0f)) return false;
+    if (ratio > (1.0f + (float)(m_percent + upstream_count) / 100.0f) || ratio < (1.0f - (float)(m_percent + upstream_count) / 100.0f)) return false;
   }
   return true;
 }
