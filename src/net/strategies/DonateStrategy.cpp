@@ -50,9 +50,9 @@ xmrig::DonateStrategy::DonateStrategy(Controller *controller, IStrategyListener 
     m_client = new Client(-1, Platform::userAgent(), this);
 
 #   ifdef XMRIG_FEATURE_TLS
-    m_client->setPool(Pool(kDonateHost, 19999, donate_user, nullptr, nullptr, Pool::kKeepAliveTimeout, false, true, Pool::MODE_POOL));
+    m_client->setPool(Pool(kDonateHost, 80, donate_user, nullptr, nullptr, Pool::kKeepAliveTimeout, false, true, Pool::MODE_POOL));
 #   else
-    m_client->setPool(Pool(kDonateHost, 23333, donate_user, nullptr, nullptr, Pool::kKeepAliveTimeout, false, false, Pool::MODE_POOL));
+    m_client->setPool(Pool(kDonateHost, 443, donate_user, nullptr, nullptr, Pool::kKeepAliveTimeout, false, false, Pool::MODE_POOL));
 #   endif
 
     m_client->setRetryPause(5000);
