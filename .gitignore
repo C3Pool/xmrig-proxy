@@ -1,2 +1,4 @@
 /build
+package-lock.json
 /CMakeLists.txt.user
+.vscode

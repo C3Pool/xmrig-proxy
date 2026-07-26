@@ -40,6 +40,9 @@ namespace xmrig {
 
 
 class Controller;
+/* MoneroOcean change: begin NonceMapper only exposes concrete Client algo-switch hooks after verifying the upstream type in the .cpp. */
+class Client;
+/* MoneroOcean change: end */
 class DonateStrategy;
 class IStrategy;
 class JobResult;
@@ -71,13 +74,16 @@ public:
 
     bool add(Miner *miner);
     bool isActive() const;
+    /* MoneroOcean change: begin Delegate MoneroOcean grouping decisions through normal Client wrappers without changing IClient. */
+    bool tryMiner(const Miner *miner, int upstreamCount) const;
+    void setAlgoPerfSameThreshold(uint64_t percent);
+    /* MoneroOcean change: end */
     void gc();
     void reload(const Pools &pools);
     void remove(const Miner *miner);
     void start();
     void submit(SubmitEvent *event);
     void tick(uint64_t ticks, uint64_t now);
-    IClient* client() const;
 
     inline bool isSuspended() const { return m_suspended > 0; }
     inline int suspended() const    { return m_suspended; }
@@ -95,6 +101,10 @@ protected:
     void onVerifyAlgorithm(IStrategy *strategy, const IClient *client, const Algorithm &algorithm, bool *ok) override;
 
 private:
+    /* MoneroOcean change: begin Return non-null only for an exact normal Client, excluding Eth/Auto/daemon wrappers from MoneroOcean getjob hooks. */
+    Client *client() const;
+    Client *donateClient() const;
+    /* MoneroOcean change: end */
     SubmitCtx submitCtx(int64_t seq);
     void connect();
     void setJob(const char *host, int port, const Job &job);

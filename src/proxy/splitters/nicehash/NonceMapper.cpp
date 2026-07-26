@@ -5,8 +5,8 @@
  * Copyright 2014-2016 Wolf9466    <https://github.com/OhGodAPet>
  * Copyright 2016      Jay D Dee   <jayddee246@gmail.com>
  * Copyright 2017-2018 XMR-Stak    <https://github.com/fireice-uk>, <https://github.com/psychocrypt>
- * Copyright 2018-2020 SChernykh   <https://github.com/SChernykh>
- * Copyright 2016-2020 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
+ * Copyright 2018-2025 SChernykh   <https://github.com/SChernykh>
+ * Copyright 2016-2025 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
  *
  *   This program is free software: you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -22,10 +22,11 @@
  *   along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 #include <cinttypes>
-#include <memory>
 #include <cstring>
+/* MoneroOcean change: begin typeid lets us distinguish exact normal Client instances from EthStratumClient subclasses before calling algo-switch wrappers. */
+#include <typeinfo>
+/* MoneroOcean change: end */
 
 
 #include "proxy/splitters/nicehash/NonceMapper.h"
@@ -37,12 +38,27 @@
 #include "core/Controller.h"
 #include "net/JobResult.h"
 #include "net/strategies/DonateStrategy.h"
-#include "proxy/Counters.h"
 #include "proxy/Error.h"
 #include "proxy/events/AcceptEvent.h"
 #include "proxy/events/SubmitEvent.h"
 #include "proxy/Miner.h"
 #include "proxy/splitters/nicehash/NonceStorage.h"
+
+
+/* MoneroOcean change: begin MoneroOcean algo switching is valid only on normal stratum Client instances, not every IClient implementation. */
+namespace {
+
+
+xmrig::Client *normalClient(xmrig::IClient *client)
+{
+    auto *stratum = dynamic_cast<xmrig::Client *>(client);
+
+    return stratum && typeid(*stratum) == typeid(xmrig::Client) ? stratum : nullptr;
+}
+
+
+} // namespace
+/* MoneroOcean change: end */
 
 
 xmrig::NonceMapper::NonceMapper(size_t id, Controller *controller) :
@@ -83,10 +99,42 @@ bool xmrig::NonceMapper::add(Miner *miner)
     }
 
     miner->setMapperId(static_cast<ssize_t>(m_id));
-    client()->add_miner(miner);
-    if (m_donate) m_donate->client()->add_miner(miner);
+    /* MoneroOcean change: begin Add miner capabilities to normal upstream clients and refresh MoneroOcean work with getjob. */
+    if (Client *upstream = client()) {
+        upstream->addMiner(miner);
+    }
+    if (Client *donate = donateClient()) {
+        donate->addMiner(miner);
+    }
+    /* MoneroOcean change: end */
     return true;
 }
+
+
+/* MoneroOcean change: begin Ask normal upstream clients whether this miner can share their current MoneroOcean algo/perf group. */
+bool xmrig::NonceMapper::tryMiner(const Miner *miner, int upstreamCount) const
+{
+    Client *upstream = client();
+
+    return upstream == nullptr || upstream->tryMiner(miner, upstreamCount);
+}
+
+
+void xmrig::NonceMapper::setAlgoPerfSameThreshold(uint64_t percent)
+{
+    if (Client *upstream = client()) {
+        upstream->setAlgoPerfSameThreshold(percent);
+    }
+    if (m_pending) {
+        if (Client *pending = normalClient(m_pending->client())) {
+            pending->setAlgoPerfSameThreshold(percent);
+        }
+    }
+    if (Client *donate = donateClient()) {
+        donate->setAlgoPerfSameThreshold(percent);
+    }
+}
+/* MoneroOcean change: end */
 
 
 bool xmrig::NonceMapper::isActive() const
@@ -122,8 +170,14 @@ void xmrig::NonceMapper::reload(const Pools &pools)
 void xmrig::NonceMapper::remove(const Miner *miner)
 {
     m_storage->remove(miner);
-    client()->del_miner(miner);
-    if (m_donate) m_donate->client()->del_miner(miner);
+    /* MoneroOcean change: begin Remove miner capabilities so upstream getjob reflects the remaining MoneroOcean group. */
+    if (Client *upstream = client()) {
+        upstream->removeMiner(miner);
+    }
+    if (Client *donate = donateClient()) {
+        donate->removeMiner(miner);
+    }
+    /* MoneroOcean change: end */
 }
 
 
@@ -136,15 +190,15 @@ void xmrig::NonceMapper::start()
 void xmrig::NonceMapper::submit(SubmitEvent *event)
 {
     if (!m_storage->isActive()) {
-        return event->reject(Error::BadGateway);
+        return event->setError(Error::BadGateway);
     }
 
     if (!m_storage->isValidJobId(event->request.jobId)) {
-        return event->reject(Error::InvalidJobId);
+        return event->setError(Error::InvalidJobId);
     }
 
     if (event->request.algorithm.isValid() && event->request.algorithm != m_storage->job().algorithm()) {
-        return event->reject(Error::IncorrectAlgorithm);
+        return event->setError(Error::IncorrectAlgorithm);
     }
 
     JobResult req = event->request;
@@ -171,9 +225,18 @@ void xmrig::NonceMapper::tick(uint64_t, uint64_t now)
 }
 
 
-xmrig::IClient* xmrig::NonceMapper::client() const {
-  return m_strategy->client();
+/* MoneroOcean change: begin Restrict MoneroOcean algo-switch hooks to exact normal Client instances. */
+xmrig::Client *xmrig::NonceMapper::client() const
+{
+    return normalClient(m_strategy->client());
 }
+
+
+xmrig::Client *xmrig::NonceMapper::donateClient() const
+{
+    return m_donate ? normalClient(m_donate->client()) : nullptr;
+}
+/* MoneroOcean change: end */
 
 
 #ifdef APP_DEVEL

@@ -81,7 +81,7 @@ xmrig::Client::Client(int id, const char *agent, IClientListener *listener) :
     BaseClient(id, listener),
     m_agent(agent),
     m_sendBuf(1024),
-    m_tempBuf(256)
+    m_tempBuf(320)
 {
     m_reader.setListener(this);
     m_key = m_storage.add(this);
@@ -199,12 +199,17 @@ int64_t xmrig::Client::submit(const JobResult &result)
     char *nonce = m_tempBuf.data();
     char *data  = m_tempBuf.data() + 16;
     char *signature = m_tempBuf.data() + 88;
+    char *commitment = m_tempBuf.data() + 224;
 
     Cvt::toHex(nonce, sizeof(uint32_t) * 2 + 1, reinterpret_cast<const uint8_t *>(&result.nonce), sizeof(uint32_t));
     Cvt::toHex(data, 65, result.result(), 32);
 
     if (result.minerSignature()) {
         Cvt::toHex(signature, 129, result.minerSignature(), 64);
+    }
+
+    if (result.commitment()) {
+        Cvt::toHex(commitment, 65, result.commitment(), 32);
     }
 #   endif
 
@@ -224,6 +229,16 @@ int64_t xmrig::Client::submit(const JobResult &result)
 #   else
     if (result.sig) {
         params.AddMember("sig", StringRef(result.sig), allocator);
+    }
+#   endif
+
+#   ifndef XMRIG_PROXY_PROJECT
+    if (result.commitment()) {
+        params.AddMember("commitment", StringRef(commitment), allocator);
+    }
+#   else
+    if (result.commitment) {
+        params.AddMember("commitment", StringRef(result.commitment), allocator);
     }
 #   endif
 
@@ -305,6 +320,41 @@ void xmrig::Client::tick(uint64_t now)
         close();
     }
 }
+
+
+/* MoneroOcean change: begin These wrappers keep miner algo switching on concrete normal stratum clients instead of adding MoneroOcean methods to IClient. */
+bool xmrig::Client::tryMiner(const Miner *miner, int upstreamCount) const
+{
+    return AlgoSwitch::tryMiner(miner, upstreamCount);
+}
+
+
+void xmrig::Client::addMiner(const Miner *miner)
+{
+    AlgoSwitch::addMiner(miner);
+    getjob();
+}
+
+
+void xmrig::Client::removeMiner(const Miner *miner)
+{
+    AlgoSwitch::removeMiner(miner);
+    getjob();
+}
+
+
+void xmrig::Client::setAlgoPerfSameThreshold(uint64_t percent)
+{
+    AlgoSwitch::setSameThreshold(percent);
+}
+
+
+void xmrig::Client::setPool(const Pool &pool)
+{
+    BaseClient::setPool(pool);
+    AlgoSwitch::setDefaultAlgo(pool.algorithm());
+}
+/* MoneroOcean change: end */
 
 
 void xmrig::Client::onResolved(const DnsRecords &records, int status, const char *error)
@@ -554,6 +604,7 @@ int64_t xmrig::Client::send(size_t size)
     }
 
     m_expire = Chrono::steadyMSecs() + kResponseTimeout;
+    startTimeout();
     return m_sequence++;
 }
 
@@ -616,20 +667,20 @@ bool xmrig::Client::parseLogin(const rapidjson::Value &result, int *code)
 }
 
 
+/* MoneroOcean change: begin getjob returns a top-level job object, so parsing it separately avoids treating refreshed jobs as new logins. */
 bool xmrig::Client::parseGetjob(const rapidjson::Value &result, int *code)
 {
     setRpcId(Json::getString(result, "id"));
-    if (m_rpcId.isNull()) {
+    if (rpcId().isNull()) {
         *code = 1;
         return false;
     }
 
     parseExtensions(result);
 
-    const bool rc = parseJob(result, code);
-
-    return rc;
+    return parseJob(result, code);
 }
+/* MoneroOcean change: end */
 
 
 void xmrig::Client::login()
@@ -644,8 +695,10 @@ void xmrig::Client::login()
     params.AddMember("login", m_user.toJSON(),     allocator);
     params.AddMember("pass",  m_password.toJSON(), allocator);
     params.AddMember("agent", StringRef(m_agent),  allocator);
-    params.AddMember("algo", algos_toJSON(doc),    allocator);
-    params.AddMember("algo-perf", algo_perfs_toJSON(doc), allocator);
+    /* MoneroOcean change: begin Advertise normalized miner algo/algo-perf capabilities so MoneroOcean can choose compatible work. */
+    params.AddMember("algo", AlgoSwitch::algosToJSON(doc), allocator);
+    params.AddMember("algo-perf", AlgoSwitch::algoPerfsToJSON(doc), allocator);
+    /* MoneroOcean change: end */
 
     if (!m_rigId.isNull()) {
         params.AddMember("rigid", m_rigId.toJSON(), allocator);
@@ -659,24 +712,28 @@ void xmrig::Client::login()
 }
 
 
+/* MoneroOcean change: begin Refresh the upstream job when miner capabilities change instead of reconnecting the pool client. */
 void xmrig::Client::getjob()
 {
     using namespace rapidjson;
 
-    if (!m_rpcId) return;
+    if (!m_rpcId) {
+        return;
+    }
 
     Document doc(kObjectType);
     auto &allocator = doc.GetAllocator();
 
     Value params(kObjectType);
     params.AddMember("id", StringRef(m_rpcId.data()), allocator);
-    params.AddMember("algo", algos_toJSON(doc), allocator);
-    params.AddMember("algo-perf", algo_perfs_toJSON(doc), allocator);
+    params.AddMember("algo", AlgoSwitch::algosToJSON(doc), allocator);
+    params.AddMember("algo-perf", AlgoSwitch::algoPerfsToJSON(doc), allocator);
 
     JsonRequest::create(doc, 1, "getjob", params);
 
     send(doc);
 }
+/* MoneroOcean change: end */
 
 
 void xmrig::Client::onClose()
@@ -699,8 +756,6 @@ void xmrig::Client::onClose()
 
 void xmrig::Client::parse(char *line, size_t len)
 {
-    startTimeout();
-
     LOG_DEBUG("[%s] received (%d bytes): \"%.*s\"", url(), len, static_cast<int>(len), line);
 
     if (len < 22 || line[0] != '{') {
@@ -714,7 +769,7 @@ void xmrig::Client::parse(char *line, size_t len)
     rapidjson::Document doc;
     if (doc.ParseInsitu(line).HasParseError()) {
         if (!isQuiet()) {
-            LOG_ERR("%s " RED("JSON decode failed: ") RED_BOLD("\"%s\": %s"), tag(), rapidjson::GetParseError_En(doc.GetParseError()), line);
+            LOG_ERR("%s " RED("JSON decode failed: ") RED_BOLD("\"%s\""), tag(), rapidjson::GetParseError_En(doc.GetParseError()));
         }
 
         return;
@@ -853,15 +908,7 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
         const char *message = error["message"].GetString();
 
         if (!handleSubmitResponse(id, message) && !isQuiet()) {
-            using namespace rapidjson;
-            Document doc(kObjectType);
-            StringBuffer buffer1(nullptr, 512), buffer2(nullptr, 512);
-            Writer<StringBuffer> writer1(buffer1), writer2(buffer2);
-            algos_toJSON(doc).Accept(writer1);
-            algo_perfs_toJSON(doc).Accept(writer2);
-
-            LOG_ERR("%s " RED("error: ") RED_BOLD("\"%s\"") RED(", code: ") RED_BOLD("%d") " with %s algo and %s algo_perf",
-                    tag(), message, Json::getInt(error, "code"), buffer1.GetString(), buffer2.GetString());
+            LOG_ERR("%s " RED("error: ") RED_BOLD("\"%s\"") RED(", code: ") RED_BOLD("%d"), tag(), message, Json::getInt(error, "code"));
         }
 
         if (m_id == 1 || isCriticalError(message)) {
@@ -877,10 +924,12 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
 
     if (id == 1) {
         int code = -1;
+        /* MoneroOcean change: begin A getjob response also uses id 1, and should update the current job without replaying login success. */
         if (parseGetjob(result, &code)) {
             m_listener->onJobReceived(this, m_job, result);
             return;
         }
+        /* MoneroOcean change: end */
         if (!parseLogin(result, &code)) {
             if (!isQuiet()) {
                 LOG_ERR("%s " RED("login error code: ") RED_BOLD("%d"), tag(), code);
@@ -907,8 +956,6 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
 void xmrig::Client::ping()
 {
     send(snprintf(m_sendBuf.data(), m_sendBuf.size(), "{\"id\":%" PRId64 ",\"jsonrpc\":\"2.0\",\"method\":\"keepalived\",\"params\":{\"id\":\"%s\"}}\n", m_sequence, m_rpcId.data()));
-
-    m_keepAlive = 0;
 }
 
 

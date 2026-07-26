@@ -15,124 +15,233 @@
  *   along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <cassert>
+/* MoneroOcean change: begin MoneroOcean pools choose work from miner algo/algo-perf capability sets, so the proxy keeps a normalized group-wide set per upstream client. */
 #include "base/net/stratum/AlgoSwitch.h"
-#include <algorithm>
-#include "proxy/Miner.h"
+#include "3rdparty/rapidjson/document.h"
 #include "base/io/log/Log.h"
+#include "proxy/Miner.h"
+
+
+#include <algorithm>
+#include <cassert>
+#include <iterator>
+
 
 namespace xmrig {
 
-Algorithms AlgoSwitch::intersection(Algorithms a1, Algorithms a2) const {
-  Algorithms r;
-  std::sort(a1.begin(), a1.end());
-  std::sort(a2.begin(), a2.end());
-  std::set_intersection(a1.begin(), a1.end(), a2.begin(), a2.end(), std::back_inserter(r));
-  return r;
+
+static bool algoLess(const Algorithm &left, const Algorithm &right)
+{
+    return left.id() < right.id();
 }
 
-algo_perfs AlgoSwitch::intersection(const algo_perfs& a1, const algo_perfs& a2) const {
-  algo_perfs r;
-  algo_perfs::const_iterator i1 = a1.begin();
-  algo_perfs::const_iterator i2 = a2.begin();
-  while (i1 != a1.end() && i2 != a2.end()) {
-    if (i1->first < i2->first) ++ i1;
-    else if (i2->first < i1->first) ++ i2;
+
+static Algorithms normalizeAlgos(Algorithms algos)
+{
+    algos.erase(std::remove_if(algos.begin(), algos.end(), [](const Algorithm &algo) { return !algo.isValid(); }), algos.end());
+    std::sort(algos.begin(), algos.end(), algoLess);
+    algos.erase(std::unique(algos.begin(), algos.end(), [](const Algorithm &left, const Algorithm &right) { return left.id() == right.id(); }), algos.end());
+
+    return algos;
+}
+
+
+static bool appendDefault(Algorithms &algos, algo_perfs &perfs, Algorithm::Id id, float perf)
+{
+    const Algorithm algo(id);
+    if (!algo.isValid() || perfs.count(id)) {
+        return false;
+    }
+
+    algos.emplace_back(id);
+    perfs.insert(algo_perf(id, perf));
+
+    return true;
+}
+
+
+AlgoSwitch::AlgoSwitch()
+{
+    setDefaultAlgo(Algorithm(Algorithm::RX_0));
+}
+
+
+Algorithms AlgoSwitch::intersection(Algorithms left, Algorithms right) const
+{
+    left = normalizeAlgos(std::move(left));
+    right = normalizeAlgos(std::move(right));
+
+    Algorithms out;
+    std::set_intersection(left.begin(), left.end(), right.begin(), right.end(), std::back_inserter(out), algoLess);
+
+    return out;
+}
+
+
+algo_perfs AlgoSwitch::intersection(const algo_perfs &left, const algo_perfs &right) const
+{
+    algo_perfs out;
+    auto l = left.begin();
+    auto r = right.begin();
+
+    while (l != left.end() && r != right.end()) {
+        if (l->first < r->first) {
+            ++l;
+        }
+        else if (r->first < l->first) {
+            ++r;
+        }
+        else {
+            out.insert(algo_perf(l->first, l->second + r->second));
+            ++l;
+            ++r;
+        }
+    }
+
+    return out;
+}
+
+
+AlgoSwitch::MinerAlgoPerfData AlgoSwitch::minerData(const Miner *miner) const
+{
+    if (miner->get_algos().empty() && miner->get_algo_perfs().empty()) {
+        return { m_defaultAlgos, m_defaultAlgoPerfs };
+    }
+
+    return { miner->get_algos(), miner->get_algo_perfs() };
+}
+
+
+void AlgoSwitch::computeCommonMinerAlgoPerfs()
+{
+    m_algos.clear();
+    m_algoPerfs.clear();
+
+    for (const auto &minerAlgoPerf : m_minerAlgoPerfs) {
+        const Algorithms &algos = minerAlgoPerf.second.first;
+        const algo_perfs &perfs = minerAlgoPerf.second.second;
+
+        m_algos = m_algos.empty() ? algos : intersection(m_algos, algos);
+        m_algoPerfs = m_algoPerfs.empty() ? perfs : intersection(m_algoPerfs, perfs);
+    }
+}
+
+
+void AlgoSwitch::setDefaultAlgo(const Algorithm &algorithm)
+{
+    m_defaultAlgos.clear();
+    m_defaultAlgoPerfs.clear();
+
+    if (algorithm.isValid()) {
+        appendDefault(m_defaultAlgos, m_defaultAlgoPerfs, algorithm.id(), 1000.0F);
+    }
     else {
-      r.insert(algo_perf(i1->first, i1->second + i2->second));
-      ++ i1;
-      ++ i2;
+        appendDefault(m_defaultAlgos, m_defaultAlgoPerfs, Algorithm::RX_0, 1000.0F);
+        appendDefault(m_defaultAlgos, m_defaultAlgoPerfs, Algorithm::RX_V2, 1000.0F);
     }
-  }
-  return r;
+
+    appendDefault(m_defaultAlgos, m_defaultAlgoPerfs, Algorithm::CN_HEAVY_XHV, 10.0F);
+    appendDefault(m_defaultAlgos, m_defaultAlgoPerfs, Algorithm::CN_HALF, 1.0F);
 }
 
-void AlgoSwitch::compute_common_miner_algo_perfs() {
-  m_algos.clear();
-  m_algo_perfs.clear();
-  for (const auto& miner_algo_perf: m_miner_algo_perfs) {
-    const Algorithms& algos = miner_algo_perf.second.first;
-    const algo_perfs& algo_perfs = miner_algo_perf.second.second;
-    m_algos      = m_algos.empty()      ? algos      : intersection(m_algos, algos);
-    m_algo_perfs = m_algo_perfs.empty() ? algo_perfs : intersection(m_algo_perfs, algo_perfs);
-  }
-}
 
-void AlgoSwitch::setDefaultAlgoSwitchAlgo(const Algorithm& algo) {
-  m_default_algos.clear();
-  m_default_algo_perfs.clear();
-  if (algo.isValid()) {
-    m_default_algos.push_back(algo.id());
-    m_default_algo_perfs.insert(algo_perf(algo.id(), 1000));
-  } else {
-    m_default_algos.push_back(Algorithm::RX_0);
-    m_default_algo_perfs.insert(algo_perf(Algorithm::RX_0, 1000));
-  }
-  m_default_algos.push_back(Algorithm::CN_HEAVY_XHV);
-  m_default_algo_perfs.insert(algo_perf(Algorithm::CN_HEAVY_XHV, 10));
-  m_default_algos.push_back(Algorithm::CN_HALF);
-  m_default_algo_perfs.insert(algo_perf(Algorithm::CN_HALF, 1));
-}
+rapidjson::Value AlgoSwitch::algosToJSON(rapidjson::Document &doc) const
+{
+    auto &allocator = doc.GetAllocator();
+    rapidjson::Value algos(rapidjson::kArrayType);
 
-rapidjson::Value AlgoSwitch::algos_toJSON(rapidjson::Document& doc) const {
-  auto &allocator = doc.GetAllocator();
-  rapidjson::Value algos(rapidjson::kArrayType);
-  for (const auto& algo: m_algos.empty() ? m_default_algos : m_algos) {
-    algos.PushBack(algo.toJSON(), allocator);
-  }
-  return algos;
-}
-
-rapidjson::Value AlgoSwitch::algo_perfs_toJSON(rapidjson::Document& doc) const {
-  auto &allocator = doc.GetAllocator();
-  rapidjson::Value algo_perfs(rapidjson::kObjectType);
-  for (const auto& algo_perf: m_algo_perfs.empty() ? m_default_algo_perfs : m_algo_perfs) {
-    algo_perfs.AddMember(rapidjson::StringRef(Algorithm(algo_perf.first).name()), algo_perf.second, allocator);
-  }
-  return algo_perfs;
-}
-
-void AlgoSwitch::set_algo_perf_same_threshold(uint64_t percent) {
-  m_percent = percent;
-}
-
-bool AlgoSwitch::try_miner(const Miner* miner, const int upstream_count) const {
-  if (m_miner_algo_perfs.empty()) return true;
-  // make sure algos are the same, if not return false
-  if (m_algos.size() != miner->get_algos().size() || intersection(m_algos, miner->get_algos()).size() < m_algos.size()) return false;
-  // make sure algo_perfs has the same keys, if not return false
-  if (m_algo_perfs.size() != miner->get_algo_perfs().size() || intersection(m_algo_perfs, miner->get_algo_perfs()).size() < m_algo_perfs.size()) return false;
-  // if any hashrate ratio of more than 20% then we do not place miners in the same group
-  algo_perfs::const_iterator i1 = m_algo_perfs.begin();
-  algo_perfs::const_iterator i2 = miner->get_algo_perfs().begin();
-  for (; i1 != m_algo_perfs.end(); ++ i1, ++ i2) {
-    assert(i1->first == i2->first);
-    if (i2->second == 0.0f) {
-      if (i1->second == 0.0f) continue;
-      return false;
+    for (const auto &algo : m_algos.empty() ? m_defaultAlgos : m_algos) {
+        algos.PushBack(algo.toJSON(), allocator);
     }
-    const float ratio = i1->second / m_miner_algo_perfs.size() / i2->second;
-    if (ratio > (1.0f + (float)(m_percent + upstream_count) / 100.0f) || ratio < (1.0f - (float)(m_percent + upstream_count) / 100.0f)) return false;
-  }
-  return true;
+
+    return algos;
 }
 
-void AlgoSwitch::add_miner(const Miner* miner) {
-  const Algorithms algos      = m_miner_algo_perfs.empty() ? miner->get_algos()      : intersection(m_algos, miner->get_algos());
-  const algo_perfs algo_perfs = m_miner_algo_perfs.empty() ? miner->get_algo_perfs() : intersection(m_algo_perfs, miner->get_algo_perfs());
-  if ((!m_algos.empty() && algos.empty()) || (!m_algo_perfs.empty() && algo_perfs.empty())) {
-    LOG_WARN("[%s] ignoring miner for algo/algo-perf calcs since it makes them empty", miner->ip());
-  } else {
-    m_algos      = algos;
-    m_algo_perfs = algo_perfs;
-    m_miner_algo_perfs.insert(miner_algo_perf(miner->id(), miner_algo_perf_data(miner->get_algos(), miner->get_algo_perfs())));
-  }
+
+rapidjson::Value AlgoSwitch::algoPerfsToJSON(rapidjson::Document &doc) const
+{
+    auto &allocator = doc.GetAllocator();
+    rapidjson::Value perfs(rapidjson::kObjectType);
+
+    for (const auto &algoPerf : m_algoPerfs.empty() ? m_defaultAlgoPerfs : m_algoPerfs) {
+        perfs.AddMember(rapidjson::StringRef(Algorithm(algoPerf.first).name()), algoPerf.second, allocator);
+    }
+
+    return perfs;
 }
 
-void AlgoSwitch::del_miner(const Miner* miner) {
-  m_miner_algo_perfs.erase(miner->id());
-  compute_common_miner_algo_perfs();
+
+void AlgoSwitch::setSameThreshold(uint64_t percent)
+{
+    m_percent = percent;
+}
+
+
+bool AlgoSwitch::tryMiner(const Miner *miner, const int upstreamCount) const
+{
+    if (m_minerAlgoPerfs.empty()) {
+        return true;
+    }
+
+    const MinerAlgoPerfData data = minerData(miner);
+    const Algorithms &algos = data.first;
+    const algo_perfs &perfs = data.second;
+
+    const Algorithms commonAlgos = intersection(m_algos, algos);
+    if (commonAlgos.empty()) {
+        return false;
+    }
+
+    for (const Algorithm &algo : commonAlgos) {
+        const auto group = m_algoPerfs.find(algo.id());
+        const auto candidate = perfs.find(algo.id());
+
+        if (group == m_algoPerfs.end() || candidate == perfs.end()) {
+            return false;
+        }
+
+        if (candidate->second == 0.0F) {
+            if (group->second == 0.0F) {
+                continue;
+            }
+
+            return false;
+        }
+
+        const float ratio = group->second / static_cast<float>(m_minerAlgoPerfs.size()) / candidate->second;
+        const float threshold = static_cast<float>(m_percent + upstreamCount) / 100.0F;
+        if (ratio > (1.0F + threshold) || ratio < (1.0F - threshold)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+void AlgoSwitch::addMiner(const Miner *miner)
+{
+    const MinerAlgoPerfData data = minerData(miner);
+    const Algorithms algos = m_minerAlgoPerfs.empty() ? data.first : intersection(m_algos, data.first);
+    const algo_perfs perfs = m_minerAlgoPerfs.empty() ? data.second : intersection(m_algoPerfs, data.second);
+
+    if ((!m_algos.empty() && algos.empty()) || (!m_algoPerfs.empty() && perfs.empty())) {
+        LOG_WARN("[%s] ignoring miner for algo/algo-perf calculations because it would leave no common MoneroOcean algorithms", miner->ip());
+        return;
+    }
+
+    m_algos = algos;
+    m_algoPerfs = perfs;
+    m_minerAlgoPerfs.insert({ miner->id(), data });
+}
+
+
+void AlgoSwitch::removeMiner(const Miner *miner)
+{
+    m_minerAlgoPerfs.erase(miner->id());
+    computeCommonMinerAlgoPerfs();
 }
 
 
 } /* namespace xmrig */
+/* MoneroOcean change: end */

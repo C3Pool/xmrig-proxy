@@ -5,8 +5,8 @@
  * Copyright 2014-2016 Wolf9466    <https://github.com/OhGodAPet>
  * Copyright 2016      Jay D Dee   <jayddee246@gmail.com>
  * Copyright 2017-2018 XMR-Stak    <https://github.com/fireice-uk>, <https://github.com/psychocrypt>
- * Copyright 2018-2021 SChernykh   <https://github.com/SChernykh>
- * Copyright 2016-2021 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
+ * Copyright 2018-2025 SChernykh   <https://github.com/SChernykh>
+ * Copyright 2016-2025 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
  *
  *   This program is free software: you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -25,19 +25,19 @@
 #ifndef XMRIG_MINER_H
 #define XMRIG_MINER_H
 
-
 #include <algorithm>
 #include <bitset>
 #include <uv.h>
 
-
 #include "3rdparty/rapidjson/fwd.h"
 #include "base/kernel/interfaces/ILineListener.h"
+/* MoneroOcean change: begin Miners carry normalized algo/algo-perf capabilities so upstream grouping does not depend on raw login JSON. */
+#include "base/crypto/Algorithm.h"
+/* MoneroOcean change: end */
 #include "base/net/tools/LineReader.h"
 #include "base/net/tools/Storage.h"
 #include "base/tools/Object.h"
 #include "base/tools/String.h"
-#include "base/crypto/Algorithm.h"
 
 
 using BIO = struct bio_st;
@@ -86,8 +86,10 @@ public:
     inline const String &user() const                             { return m_user; }
     inline int32_t routeId() const                                { return m_routeId; }
     inline int64_t id() const                                     { return m_id; }
-    inline const Algorithms& get_algos() const                    { return m_algos; }
-    inline const algo_perfs& get_algo_perfs() const               { return m_algo_perfs; }
+    /* MoneroOcean change: begin Expose normalized capabilities to Client-side algo switching without reparsing miner login JSON. */
+    inline const Algorithms &get_algos() const                    { return m_algos; }
+    inline const algo_perfs &get_algo_perfs() const               { return m_algoPerfs; }
+    /* MoneroOcean change: end */
     inline ssize_t mapperId() const                               { return m_mapperId; }
     inline State state() const                                    { return m_state; }
     inline uint16_t localPort() const                             { return m_localPort; }
@@ -115,6 +117,9 @@ private:
     constexpr static size_t kSocketTimeout = 60 * 10 * 1000;
 
     bool isWritable() const;
+    /* MoneroOcean change: begin Keep miner algo and algo-perf keys aligned so MoneroOcean grouping never falls back to unrelated defaults. */
+    void normalizeAlgoCapabilities();
+    /* MoneroOcean change: end */
     bool parseRequest(int64_t id, const char *method, const rapidjson::Value &params);
     bool send(BIO *bio);
     void heartbeat();
@@ -150,7 +155,7 @@ private:
     String m_rigId;
     String m_user;
     String m_signatureData;
-    uint8_t m_viewTag;
+    uint8_t m_viewTag       = 0;
     Tls *m_tls              = nullptr;
     uint16_t m_localPort;
     uint64_t m_customDiff   = 0;
@@ -163,14 +168,16 @@ private:
     int64_t m_extraNonce    = -1;
     uintptr_t m_key;
     uv_tcp_t *m_socket;
+    /* MoneroOcean change: begin Normalized per-miner capabilities drive upstream algo-switch grouping and getjob refreshes. */
     Algorithms m_algos;
-    algo_perfs m_algo_perfs;
+    algo_perfs m_algoPerfs;
+    /* MoneroOcean change: end */
 
     static char m_sendBuf[16384];
     static Storage<Miner> m_storage;
 };
 
 
-} /* namespace xmrig */
+} // namespace xmrig
 
-#endif /* XMRIG_MINER_H */
+#endif // XMRIG_MINER_H

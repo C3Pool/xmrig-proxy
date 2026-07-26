@@ -15,38 +15,54 @@
  *   along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+/* MoneroOcean change: begin MoneroOcean pools choose work from miner algo/algo-perf capability sets, so the proxy keeps a normalized group-wide set per upstream client. */
+#ifndef XMRIG_ALGOSWITCH_H
+#define XMRIG_ALGOSWITCH_H
 
-#include "3rdparty/rapidjson/document.h"
+
+#include "3rdparty/rapidjson/fwd.h"
 #include "base/crypto/Algorithm.h"
+
 
 namespace xmrig {
 
+
 class Miner;
 
-class AlgoSwitch {
-  typedef std::pair<Algorithms, algo_perfs> miner_algo_perf_data;
-  typedef std::pair<int64_t, miner_algo_perf_data> miner_algo_perf;
-  typedef std::map<int64_t, miner_algo_perf_data> miner_algo_perfs;
-  uint64_t m_percent = 20;
-  miner_algo_perfs m_miner_algo_perfs;
-  Algorithms m_algos, m_default_algos;
-  algo_perfs m_algo_perfs, m_default_algo_perfs;
 
-  Algorithms intersection(Algorithms, Algorithms) const;
-  algo_perfs intersection(const algo_perfs&, const algo_perfs&) const;
+class AlgoSwitch
+{
+public:
+    AlgoSwitch();
 
-  void compute_common_miner_algo_perfs();
+    bool tryMiner(const Miner *miner, int upstreamCount) const;
+    rapidjson::Value algoPerfsToJSON(rapidjson::Document &doc) const;
+    rapidjson::Value algosToJSON(rapidjson::Document &doc) const;
+    void addMiner(const Miner *miner);
+    void removeMiner(const Miner *miner);
+    void setDefaultAlgo(const Algorithm &algorithm);
+    void setSameThreshold(uint64_t percent);
 
-  public:
-    AlgoSwitch() { setDefaultAlgoSwitchAlgo(Algorithm(Algorithm::RX_0)); }
-    void setDefaultAlgoSwitchAlgo(const Algorithm&);
-    rapidjson::Value algos_toJSON(rapidjson::Document&) const;
-    rapidjson::Value algo_perfs_toJSON(rapidjson::Document&) const;
-    void set_algo_perf_same_threshold(uint64_t);
-    bool try_miner(const Miner*, int upstream_count) const;
-    void add_miner(const Miner*);
-    void del_miner(const Miner*);
+private:
+    using MinerAlgoPerfData = std::pair<Algorithms, algo_perfs>;
+    using MinerAlgoPerfs = std::map<int64_t, MinerAlgoPerfData>;
+
+    Algorithms intersection(Algorithms left, Algorithms right) const;
+    MinerAlgoPerfData minerData(const Miner *miner) const;
+    algo_perfs intersection(const algo_perfs &left, const algo_perfs &right) const;
+    void computeCommonMinerAlgoPerfs();
+
+    Algorithms m_algos;
+    Algorithms m_defaultAlgos;
+    MinerAlgoPerfs m_minerAlgoPerfs;
+    algo_perfs m_algoPerfs;
+    algo_perfs m_defaultAlgoPerfs;
+    uint64_t m_percent = 20;
 };
 
+
 } /* namespace xmrig */
+
+
+#endif /* XMRIG_ALGOSWITCH_H */
+/* MoneroOcean change: end */

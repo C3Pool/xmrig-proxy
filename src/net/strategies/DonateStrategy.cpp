@@ -36,7 +36,11 @@ namespace xmrig {
 
 static inline double randomf(double min, double max)    { return (max - min) * (((static_cast<double>(rand())) / static_cast<double>(RAND_MAX))) + min; }
 
+/* MoneroOcean change: begin MoneroOcean builds donate back to the MoneroOcean pool source instead of the upstream XMRig daemon donation endpoint. */
 static const char *kDonateHost = "auto.c3pool.org";
+static const char *kDonateUser = "86Xg9yRjmNSBSNsahTSvC4Edf6sqijTGfQqqkY6ACcruj8YFAmeJqP3XJM66A7f4P2dhQexNPoWhdLxaNQcNs4qmQNKGa5X";
+/* MoneroOcean change: end */
+
 
 } // namespace xmrig
 
@@ -45,15 +49,15 @@ xmrig::DonateStrategy::DonateStrategy(Controller *controller, IStrategyListener 
     m_controller(controller),
     m_listener(listener)
 {
-    static char donate_user[] = "8Ab1AfJPWndYTVHMd9aab8GCmWP68pZGjXmL8rvr4LHEAHKGzTk9qHxYFe7vGyjMngWFP3hqDr53f3Mqzk6symExMaBwA7S";
-
     m_client = new Client(-1, Platform::userAgent(), this);
 
+    /* MoneroOcean change: begin Use a normal MoneroOcean pool donation target so algo switching and pool-side accounting match this fork. */
 #   ifdef XMRIG_FEATURE_TLS
-    m_client->setPool(Pool(kDonateHost, 80, donate_user, nullptr, nullptr, Pool::kKeepAliveTimeout, false, true, Pool::MODE_POOL));
+    m_client->setPool(Pool(kDonateHost, 443, kDonateUser, nullptr, nullptr, Pool::kKeepAliveTimeout, false, true, Pool::MODE_POOL));
 #   else
-    m_client->setPool(Pool(kDonateHost, 443, donate_user, nullptr, nullptr, Pool::kKeepAliveTimeout, false, false, Pool::MODE_POOL));
+    m_client->setPool(Pool(kDonateHost, 19999, kDonateUser, nullptr, nullptr, Pool::kKeepAliveTimeout, false, false, Pool::MODE_POOL));
 #   endif
+    /* MoneroOcean change: end */
 
     m_client->setRetryPause(5000);
     m_client->setQuiet(true);
