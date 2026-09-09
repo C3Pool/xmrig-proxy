@@ -23,7 +23,9 @@
 
 #include <bitset>
 #include <map>
+#include <string>
 #include <uv.h>
+#include <deque>
 #include <vector>
 
 
@@ -33,6 +35,7 @@
 #include "base/net/stratum/AlgoSwitch.h"
 /* MoneroOcean change: end */
 #include "base/net/stratum/BaseClient.h"
+#include "base/net/stratum/GetjobCooldown.h"
 #include "base/net/stratum/Job.h"
 #include "base/net/stratum/Pool.h"
 #include "base/net/stratum/SubmitResult.h"
@@ -64,10 +67,17 @@ public:
 
     constexpr static uint64_t kConnectTimeout   = 20 * 1000;
     constexpr static uint64_t kResponseTimeout  = 20 * 1000;
+    /* MoneroOcean pools rate-limit login and pre-share getjob requests per source IP. */
+    constexpr static uint64_t kUpstreamRequestWindow = 1000;
+    constexpr static uint8_t kUpstreamRequestsPerWindow = 4;
     constexpr static size_t kMaxSendBufferSize  = 1024 * 16;
 
     Client(int id, const char *agent, IClientListener *listener);
     ~Client() override;
+
+    const char *tag() const override;
+    inline uintptr_t logId() const noexcept { return m_key; }
+    const char *lastError() const;
 
     /* MoneroOcean change: begin Public wrappers let nonce splitters update normal stratum clients while avoiding MO-specific IClient methods. */
     bool tryMiner(const Miner *miner, int upstreamCount) const;
@@ -114,15 +124,27 @@ protected:
     /* MoneroOcean change: end */
     virtual void parseNotification(const char* method, const rapidjson::Value& params, const rapidjson::Value& error);
 
-    bool close();
+    bool close(const char *reason = nullptr);
     virtual void onClose();
 
 private:
     class Socks5;
     class Tls;
 
-    bool parseJob(const rapidjson::Value &params, int *code);
+    bool parseJob(const rapidjson::Value &params, int *code, const rapidjson::Value *payload = nullptr);
+    bool parseNativeNotify(const rapidjson::Value &message);
+    bool parseNativeObjectJob(const rapidjson::Value &message);
+    int64_t submitNative(const JobResult &result);
+    void parseNativeControl(const rapidjson::Value &message);
+    void parseNativeSubscribe(const rapidjson::Value &result);
+    void setNativeMetadata(const rapidjson::Value &result, bool notifyCurrentJob = false);
+    bool setNativePrefix(const char *prefix, uint32_t remainingBytes, const rapidjson::Value *message = nullptr);
+    void captureLogOffered(const rapidjson::Value &params);
+    void setLogCloseReason(const char *reason);
+    void clearLogCloseReason();
+    static std::string logText(const char *text);
     bool send(BIO *bio);
+    void subscribeNative();
     bool verifyAlgorithm(const Algorithm &algorithm, const char *algo) const;
     bool write(const uv_buf_t &buf);
     int resolve(const String &host);
@@ -133,6 +155,8 @@ private:
     void parseExtensions(const rapidjson::Value &result);
     void parseResponse(int64_t id, const rapidjson::Value &result, const rapidjson::Value &error);
     void ping();
+    void sendGetjob();
+    void sendGetjobRequest();
     void read(ssize_t nread, const uv_buf_t *buf);
     void reconnect();
     void setState(SocketState state);
@@ -157,14 +181,37 @@ private:
     std::shared_ptr<DnsRequest> m_dns;
     std::vector<char> m_sendBuf;
     std::vector<char> m_tempBuf;
+    String m_nativeControl;
+    String m_nativeControlAlgo;
+    String m_nativePrefix;
+    String m_nativeTarget;
+    uint32_t m_nativeNonceSize        = 0;
+    bool m_nativeRequested            = false;
+    bool m_nativeSubscribed           = false;
+    bool m_nativePrefixUpdated        = false;
+    const rapidjson::Value *m_currentMessage = nullptr;
     String m_rpcId;
+    mutable std::string m_logTag;
+    std::string m_logOffered;
+    std::string m_logCloseReason;
     Tls *m_tls                  = nullptr;
     uint64_t m_expire           = 0;
+    bool m_loginPending         = false;
+    bool m_loginInFlight        = false;
+    bool m_getjobDirty          = false;
+    bool m_getjobInFlight       = false;
+    std::string m_getjobAlgos;
+    GetjobCooldown m_getjobCooldown;
     uint64_t m_jobs             = 0;
     uint64_t m_keepAlive        = 0;
     uintptr_t m_key             = 0;
     uv_tcp_t *m_socket          = nullptr;
 
+    static uint64_t m_loginWindow;
+    static uint64_t m_getjobWindow;
+    static uint8_t m_loginWindowCount;
+    static uint8_t m_getjobWindowCount;
+    static std::deque<Client *> m_getjobQueue;
     static Storage<Client> m_storage;
 };
 

@@ -53,9 +53,9 @@ xmrig::DonateStrategy::DonateStrategy(Controller *controller, IStrategyListener 
 
     /* MoneroOcean change: begin Use a normal MoneroOcean pool donation target so algo switching and pool-side accounting match this fork. */
 #   ifdef XMRIG_FEATURE_TLS
-    m_client->setPool(Pool(kDonateHost, 443, kDonateUser, nullptr, nullptr, Pool::kKeepAliveTimeout, false, true, Pool::MODE_POOL));
+    m_client->setPool(Pool(kDonateHost, 80, kDonateUser, nullptr, nullptr, Pool::kKeepAliveTimeout, false, true, Pool::MODE_POOL));
 #   else
-    m_client->setPool(Pool(kDonateHost, 19999, kDonateUser, nullptr, nullptr, Pool::kKeepAliveTimeout, false, false, Pool::MODE_POOL));
+    m_client->setPool(Pool(kDonateHost, 443, kDonateUser, nullptr, nullptr, Pool::kKeepAliveTimeout, false, false, Pool::MODE_POOL));
 #   endif
     /* MoneroOcean change: end */
 

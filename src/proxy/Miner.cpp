@@ -49,9 +49,12 @@
 #endif
 
 
+#include <algorithm>
+#include <cctype>
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 
 namespace xmrig {
@@ -125,6 +128,8 @@ bool xmrig::Miner::accept(uv_stream_t *server)
 
 void xmrig::Miner::forwardJob(const Job &job, const char *algo)
 {
+    rememberJob(job);
+    if (hasExtension(EXT_NATIVE) && Algorithm::isNativeOnly(job.algorithm().id())) { sendNative(job); return; }
     m_diff = job.diff();
     setFixedByte(job.fixedByte());
 
@@ -132,15 +137,22 @@ void xmrig::Miner::forwardJob(const Job &job, const char *algo)
 }
 
 
-void xmrig::Miner::replyWithError(int64_t id, const char *message)
-{
-    send(snprintf(m_sendBuf, sizeof(m_sendBuf), "{\"id\":%" PRId64 ",\"jsonrpc\":\"2.0\",\"error\":{\"code\":-1,\"message\":\"%s\"}}\n", id, message));
-}
-
-
 void xmrig::Miner::setJob(Job &job, int64_t extra_nonce)
 {
     using namespace rapidjson;
+
+    if (hasExtension(EXT_NATIVE) && !m_algos.empty() && std::find(m_algos.begin(), m_algos.end(), job.algorithm()) == m_algos.end()) return;
+    rememberJob(job);
+    sendSubscription();
+    if (m_nativeProtocol && m_state == WaitLoginState) return;
+    if (hasExtension(EXT_NATIVE) && Algorithm::isNativeOnly(job.algorithm().id())) {
+        sendNative(job);
+        return;
+    }
+    if (m_nativeProtocol && m_state == WaitReadyState) {
+        setState(ReadyState);
+        success(m_loginId, "OK");
+    }
 
     if (hasExtension(EXT_NICEHASH)) {
         snprintf(m_sendBuf, 4, "%02hhx", m_fixedByte);
@@ -184,43 +196,41 @@ void xmrig::Miner::setJob(Job &job, int64_t extra_nonce)
 }
 
 
-void xmrig::Miner::success(int64_t id, const char *status)
-{
-    send(snprintf(m_sendBuf, sizeof(m_sendBuf), "{\"id\":%" PRId64 ",\"jsonrpc\":\"2.0\",\"error\":null,\"result\":{\"status\":\"%s\"}}\n", id, status));
-}
-
-
 bool xmrig::Miner::isWritable() const
 {
     return m_state != ClosingState && uv_is_writable(reinterpret_cast<const uv_stream_t*>(m_socket)) == 1;
 }
 
 
-/* MoneroOcean change: begin Normalize miner algo/algo-perf data so each advertised algorithm has a matching performance entry and vice versa. */
+/* MoneroOcean change: begin Normalize miner algo/algo-perf data while preserving missing measured performance entries. */
 void xmrig::Miner::normalizeAlgoCapabilities()
 {
     std::map<Algorithm::Id, float> normalizedPerfs;
+    Algorithms normalizedAlgos;
 
     for (const auto &algoPerf : m_algoPerfs) {
         const Algorithm algo(algoPerf.first);
         if (algo.isValid()) {
             normalizedPerfs[algo.id()] = algoPerf.second;
+            normalizedAlgos.emplace_back(algo.id());
         }
     }
 
     for (const Algorithm &algo : m_algos) {
-        if (algo.isValid() && normalizedPerfs.count(algo.id()) == 0) {
-            normalizedPerfs[algo.id()] = 1.0F;
+        if (algo.isValid()) {
+            normalizedAlgos.emplace_back(algo.id());
         }
     }
 
-    m_algos.clear();
-    m_algoPerfs.clear();
+    std::sort(normalizedAlgos.begin(), normalizedAlgos.end(), [](const Algorithm &left, const Algorithm &right) {
+        return left.id() < right.id();
+    });
+    normalizedAlgos.erase(std::unique(normalizedAlgos.begin(), normalizedAlgos.end(), [](const Algorithm &left, const Algorithm &right) {
+        return left.id() == right.id();
+    }), normalizedAlgos.end());
 
-    for (const auto &algoPerf : normalizedPerfs) {
-        m_algos.emplace_back(algoPerf.first);
-        m_algoPerfs.insert(algoPerf);
-    }
+    m_algos = std::move(normalizedAlgos);
+    m_algoPerfs = std::move(normalizedPerfs);
 }
 /* MoneroOcean change: end */
 
@@ -235,6 +245,12 @@ bool xmrig::Miner::parseRequest(int64_t id, const char *method, const rapidjson:
         if (strcmp(method, "login") == 0) {
             setState(WaitReadyState);
             m_loginId = id;
+            const auto &extensions = Json::getValue(params, "extensions");
+            if (extensions.IsArray()) for (const auto &extension : extensions.GetArray()) {
+                if (!extension.IsString()) continue;
+                if (strcmp(extension.GetString(), "mo-native") == 0) setExtension(EXT_NATIVE, true);
+                if (strcmp(extension.GetString(), "submit-result") == 0) setExtension(EXT_SUBMIT_RESULT, true);
+            }
 
             Algorithms algorithms;
             if (params.HasMember("algo")) {
@@ -251,7 +267,7 @@ bool xmrig::Miner::parseRequest(int64_t id, const char *method, const rapidjson:
                         /* MoneroOcean change: end */
 
                         const Algorithm algo(i.GetString());
-                        if (!algo.isValid()) {
+                        if (!algo.isValid() || (Algorithm::isNativeOnly(algo.id()) && !hasExtension(EXT_NATIVE))) {
                             continue;
                         }
 
@@ -277,11 +293,15 @@ bool xmrig::Miner::parseRequest(int64_t id, const char *method, const rapidjson:
 
                     const Algorithm algo(member->name.GetString());
                     const double perf = member->value.GetDouble();
-                    if (!algo.isValid() || perf < 0.0) {
+                    if (!algo.isValid() || (Algorithm::isNativeOnly(algo.id()) && !hasExtension(EXT_NATIVE)) || perf < 0.0) {
                         continue;
                     }
 
-                    m_algoPerfs[algo.id()] = static_cast<float>(perf);
+                    std::string name(member->name.GetString());
+                    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    if (algo == Algorithm::KAWPOW_RVN && name != "kawpow1" && algoPerf.HasMember("kawpow1") && algoPerf["kawpow1"].IsNumber() && algoPerf["kawpow1"].GetDouble() >= 0.0) continue;
+                    const double scale = algo == Algorithm::KAWPOW_RVN && (name == "kawpow" || name == "kawpow4") ? 1099511627776.0 / 255.0 : 1.0;
+                    m_algoPerfs[algo.id()] = static_cast<float>(perf * scale);
                 }
             }
             normalizeAlgoCapabilities();
@@ -301,38 +321,7 @@ bool xmrig::Miner::parseRequest(int64_t id, const char *method, const rapidjson:
 
     if (strcmp(method, "submit") == 0) {
         heartbeat();
-
-        const char *rpcId = Json::getString(params, "id");
-        if (!rpcId || m_rpcId != rpcId) {
-            replyWithError(id, Error::toString(Error::Unauthenticated));
-            return true;
-        }
-
-        Algorithm algorithm(Json::getString(params, "algo"));
-
-        SubmitEvent *event = SubmitEvent::create(this, id, Json::getString(params, "job_id"), Json::getString(params, "nonce"), Json::getString(params, "result"), algorithm, Json::getString(params, "sig"), m_signatureData, Json::getString(params, "commitment"), m_viewTag, m_extraNonce);
-
-        if (!event->request.isValid() || event->request.actualDiff() < diff()) {
-            event->setError(Error::LowDifficulty);
-        }
-        else if (hasExtension(EXT_NICEHASH) && !event->request.isCompatible(m_fixedByte)) {
-            event->setError(Error::InvalidNonce);
-        }
-
-        if (event->error() == Error::NoError && m_customDiff && event->request.actualDiff() < m_diff) {
-            success(id, "OK");
-
-            SubmitResult result = SubmitResult(1, m_customDiff, event->request.actualDiff(), event->request.id, 0);
-            AcceptEvent::start(m_mapperId, this, result, false, true);
-
-            return true;
-        }
-
-        if (!event->start()) {
-            replyWithError(id, event->message());
-        }
-
-        return event->error() != Error::InvalidNonce;
+        return submitJob(id, params);
     }
 
     if (strcmp(method, "keepalived") == 0) {
@@ -394,7 +383,7 @@ void xmrig::Miner::parse(char *line, size_t len)
 
     LOG_DEBUG("[%s] received (%d bytes): \"%s\"", m_ip, len, line);
 
-    if (len < 32 || line[0] != '{') {
+    if (len < 2 || line[0] != '{') {
         return shutdown(true);
     }
 
@@ -409,10 +398,7 @@ void xmrig::Miner::parse(char *line, size_t len)
         return shutdown(true);
     }
 
-    const rapidjson::Value &id = doc["id"];
-    if (id.IsInt64() && parseRequest(id.GetInt64(), doc["method"].GetString(), doc["params"])) {
-        return;
-    }
+    if (dispatchRequest(doc)) return;
 
     shutdown(true);
 }
@@ -532,7 +518,7 @@ void xmrig::Miner::sendJob(const char *blob, const char *jobId, const char *targ
     if (m_state == WaitReadyState) {
         setState(ReadyState);
 
-        doc.AddMember("id",    m_loginId, allocator);
+        addReplyId(doc, m_loginId);
         doc.AddMember("error", kNullType, allocator);
 
         Value result(kObjectType);
@@ -557,6 +543,8 @@ void xmrig::Miner::sendJob(const char *blob, const char *jobId, const char *targ
 #           endif
         }
 
+        if (hasExtension(EXT_NATIVE)) extensions.PushBack("mo-native", allocator);
+        if (hasExtension(EXT_SUBMIT_RESULT)) extensions.PushBack("submit-result", allocator);
         extensions.PushBack("keepalive", allocator);
 
         result.AddMember("extensions", extensions, allocator);

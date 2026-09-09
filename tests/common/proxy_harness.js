@@ -182,8 +182,9 @@ class JsonPeer extends EventEmitter {
 }
 
 class FakePool {
-    constructor(timeoutMs) {
+    constructor(timeoutMs, options = {}) {
         this.timeoutMs = timeoutMs;
+        this.options = options;
         this.server = net.createServer(socket => this.onConnection(socket));
         this.connections = [];
         this.logins = [];
@@ -214,31 +215,64 @@ class FakePool {
 
     onMessage(connection, message) {
         if (message.method === "login") {
-            this.logins.push({ connection, message });
-            connection.peer.send({
+            const job = this.nextJob();
+            this.logins.push({ at: Date.now(), connection, message, job });
+            const respond = () => connection.peer.send({
                 id: message.id,
                 jsonrpc: "2.0",
                 error: null,
                 result: {
                     id: connection.rpcId,
-                    job: this.nextJob(),
+                    job,
                     extensions: ["algo", "keepalive"]
                 }
             });
+
+            if (this.options.loginDelayMs) {
+                setTimeout(respond, this.options.loginDelayMs);
+            }
+            else {
+                respond();
+            }
+
             return;
         }
 
         if (message.method === "getjob") {
-            this.getjobs.push({ connection, message });
-            connection.peer.send({
-                id: message.id,
-                jsonrpc: "2.0",
-                error: null,
-                result: Object.assign({
-                    id: connection.rpcId,
-                    extensions: ["algo", "keepalive"]
-                }, this.nextJob())
-            });
+            const job = this.nextJob();
+            this.getjobs.push({ at: Date.now(), connection, message, job });
+            const respond = () => {
+                if (this.options.getjobError) {
+                    connection.peer.send({
+                        id: message.id,
+                        jsonrpc: "2.0",
+                        error: this.options.getjobError,
+                        result: null
+                    });
+                }
+                else {
+                    connection.peer.send({
+                        id: message.id,
+                        jsonrpc: "2.0",
+                        error: null,
+                        result: Object.assign({
+                            id: connection.rpcId,
+                            extensions: ["algo", "keepalive"]
+                        }, job)
+                    });
+                }
+
+                if (this.options.closeOnGetjob) {
+                    setTimeout(() => connection.peer.close(), 10);
+                }
+            };
+
+            if (this.options.getjobDelayMs) {
+                setTimeout(respond, this.options.getjobDelayMs);
+            }
+            else {
+                respond();
+            }
             return;
         }
 
@@ -483,7 +517,9 @@ async function stopProxy(child) {
 
 async function withProxy(testFn, options = {}) {
     const config = getTestConfig();
-    const pool = new FakePool(config.timeoutMs);
+    const pool = options.poolFactory
+        ? options.poolFactory(config.timeoutMs, options.poolOptions || {})
+        : new FakePool(config.timeoutMs, options.poolOptions || {});
     const miners = [];
     const proxyCwd = fs.mkdtempSync(path.join(os.tmpdir(), "xmrig-proxy-test-"));
     let proxy = null;
@@ -554,9 +590,10 @@ function assertPerfValues(request, expected, label) {
 function assertAlgoPayload(request, algos, perfs, label) {
     assertHasAlgoPayload(request, label);
     assertSetEqual(request.params.algo, algos, `${label}: algo set`);
-    assertSetEqual(Object.keys(request.params["algo-perf"]), algos, `${label}: algo-perf keys`);
+    const expectedPerfAlgos = perfs === undefined ? algos : Object.keys(perfs);
+    assertSetEqual(Object.keys(request.params["algo-perf"]), expectedPerfAlgos, `${label}: algo-perf keys`);
 
-    if (perfs) {
+    if (perfs !== undefined) {
         assertPerfValues(request, perfs, `${label}: algo-perf values`);
     }
 }
