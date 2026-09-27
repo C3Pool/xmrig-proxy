@@ -70,7 +70,7 @@ public:
     /* MoneroOcean pools rate-limit login and pre-share getjob requests per source IP. */
     constexpr static uint64_t kUpstreamRequestWindow = 1000;
     constexpr static uint8_t kUpstreamRequestsPerWindow = 4;
-    constexpr static size_t kMaxSendBufferSize  = 1024 * 16;
+    constexpr static size_t kMaxSendBufferSize  = 256 * 1024;
 
     Client(int id, const char *agent, IClientListener *listener);
     ~Client() override;
@@ -81,6 +81,7 @@ public:
 
     /* MoneroOcean change: begin Public wrappers let nonce splitters update normal stratum clients while avoiding MO-specific IClient methods. */
     bool tryMiner(const Miner *miner, int upstreamCount) const;
+    bool requiresPearlLogin(const Miner *miner) const;
     void addMiner(const Miner *miner);
     void removeMiner(const Miner *miner);
     void setAlgoPerfSameThreshold(uint64_t percent);
@@ -187,6 +188,7 @@ private:
     String m_nativeTarget;
     uint32_t m_nativeNonceSize        = 0;
     bool m_nativeRequested            = false;
+    bool m_pearlLogin                 = false;
     bool m_nativeSubscribed           = false;
     bool m_nativePrefixUpdated        = false;
     const rapidjson::Value *m_currentMessage = nullptr;

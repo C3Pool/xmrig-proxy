@@ -46,6 +46,7 @@
 #include "base/kernel/Platform.h"
 #include "base/net/dns/Dns.h"
 #include "base/net/dns/DnsRecords.h"
+#include "base/net/stratum/NativeTarget.h"
 #include "base/net/stratum/Socks5.h"
 #include "base/net/tools/NetBuffer.h"
 #include "base/tools/Chrono.h"
@@ -79,6 +80,7 @@ namespace {
 constexpr const char *kUnsupportedAlgoError = "algo array must include at least one supported pool algo:";
 
 xmrig::CapabilityErrorLog g_capabilityErrorLog;
+xmrig::CapabilityErrorLog g_poolErrorLog;
 
 inline bool isUnsupportedAlgoError(const char *message)
 {
@@ -94,6 +96,20 @@ inline std::string capabilityErrorKey(const xmrig::Pool &pool, const char *messa
     key += message;
 
     return key;
+}
+
+inline std::string poolErrorKey(const xmrig::Pool &pool, const char *kind, const char *message)
+{
+    std::string key(kind ? kind : "error");
+    key.push_back('\n');
+    key += capabilityErrorKey(pool, message ? message : "unknown");
+
+    return key;
+}
+
+inline bool isNoBlockTemplateError(const char *message)
+{
+    return message && strcmp(message, "No block template yet. Please wait.") == 0;
 }
 
 } /* namespace */
@@ -300,6 +316,7 @@ int64_t xmrig::Client::submit(const JobResult &result)
     m_results[m_sequence] = SubmitResult(m_sequence, result.diff, result.actualDiff(), 0, result.backend);
 #   endif
     m_results[m_sequence].assignedDiff = result.assignedDiff;
+    m_results[m_sequence].minerIp = result.minerIp;
 
     return send(doc);
 }
@@ -383,6 +400,12 @@ void xmrig::Client::tick(uint64_t now)
 bool xmrig::Client::tryMiner(const Miner *miner, int upstreamCount) const
 {
     return AlgoSwitch::tryMiner(miner, upstreamCount);
+}
+
+
+bool xmrig::Client::requiresPearlLogin(const Miner *miner) const
+{
+    return AlgoSwitch::requiresPearlLogin(miner);
 }
 
 
@@ -513,6 +536,9 @@ bool xmrig::Client::parseJob(const rapidjson::Value &params, int *code, const ra
         }
         job.setAlgorithm(m_pool.coin().algorithm(blobVersion));
     }
+    if (!blobData && job.algorithm() == Algorithm::PEARLHASH) {
+        blobData = Json::getString(params, "header");
+    }
 
 #   ifdef XMRIG_PROXY_PROJECT
     if (!m_nativePrefix.isNull()) {
@@ -561,19 +587,33 @@ bool xmrig::Client::parseJob(const rapidjson::Value &params, int *code, const ra
         }
     }
 
-    if (!job.setTarget(Json::getString(params, "target"))) {
-        if (!m_nativeRequested || job.algorithm() != Algorithm::C29) {
-            *code = 5;
-            return false;
+    const char *target = Json::getString(params, "target");
+    if (!job.setTarget(target)) {
+#   ifdef XMRIG_PROXY_PROJECT
+        if (job.algorithm() == Algorithm::PEARLHASH) {
+            const uint64_t difficulty = NativeTarget::difficulty(target, true);
+            if (!difficulty || !job.setNativeTarget(target, true)) {
+                *code = 5;
+                return false;
+            }
+            job.setDiff(difficulty);
         }
+        else
+#   endif
+        {
+            if (!m_nativeRequested || job.algorithm() != Algorithm::C29) {
+                *code = 5;
+                return false;
+            }
 
-        const uint64_t difficulty = Json::getUint64(params, "difficulty");
-        if (difficulty == 0) {
-            *code = 5;
-            return false;
+            const uint64_t difficulty = Json::getUint64(params, "difficulty");
+            if (difficulty == 0) {
+                *code = 5;
+                return false;
+            }
+
+            job.setDiff(difficulty);
         }
-
-        job.setDiff(difficulty);
     }
 
     job.setHeight(Json::getUint64(params, "height"));
@@ -692,15 +732,34 @@ bool xmrig::Client::verifyAlgorithm(const Algorithm &algorithm, const char *algo
 
 bool xmrig::Client::write(const uv_buf_t &buf)
 {
-    const int rc = uv_try_write(stream(), &buf, 1);
-    if (static_cast<size_t>(rc) == buf.len) {
+    if (buf.len > kMaxSendBufferSize ||
+        uv_stream_get_write_queue_size(stream()) > kMaxSendBufferSize - buf.len) {
+        if (!isQuiet()) {
+            LOG_ERR("%s " RED("write error: ") RED_BOLD("\"write queue limit exceeded\""), tag());
+        }
+        close("write queue limit");
+        return false;
+    }
+
+    struct WriteRequest {
+        uv_write_t request{};
+        std::vector<char> data;
+    };
+    auto *request = new WriteRequest;
+    request->data.assign(buf.base, buf.base + buf.len);
+    request->request.data = request;
+    uv_buf_t copy = uv_buf_init(request->data.data(), static_cast<unsigned int>(request->data.size()));
+    const int rc = uv_write(&request->request, stream(), &copy, 1, [](uv_write_t *req, int) {
+        delete static_cast<WriteRequest *>(req->data);
+    });
+    if (rc == 0) {
         return true;
     }
 
+    delete request;
     if (!isQuiet()) {
         LOG_ERR("%s " RED("write error: ") RED_BOLD("\"%s\""), tag(), uv_strerror(rc));
     }
-
     close(uv_strerror(rc));
 
     return false;
@@ -890,7 +949,11 @@ void xmrig::Client::login()
     params.AddMember("pass",  m_password.toJSON(), allocator);
     params.AddMember("agent", StringRef(m_agent),  allocator);
     /* MoneroOcean change: begin Advertise normalized miner algo/algo-perf capabilities so MoneroOcean can choose compatible work. */
-    params.AddMember("algo", AlgoSwitch::algosToJSON(doc), allocator);
+    Value algos = AlgoSwitch::algosToJSON(doc);
+    m_pearlLogin = std::any_of(algos.Begin(), algos.End(), [](const Value &algo) {
+        return algo.IsString() && strcmp(algo.GetString(), Algorithm::kPEARLHASH) == 0;
+    });
+    params.AddMember("algo", algos, allocator);
     params.AddMember("algo-perf", AlgoSwitch::algoPerfsToJSON(doc), allocator);
     Value extensions(kArrayType);
     extensions.PushBack("mo-native", allocator);
@@ -1109,7 +1172,8 @@ void xmrig::Client::parse(char *line, size_t len)
         return;
     }
 
-    if (m_nativeRequested && method && strcmp(method, "mining.notify") == 0) {
+    if ((m_nativeRequested || m_pool.algorithm() == Algorithm::PEARLHASH) && method &&
+        strcmp(method, "mining.notify") == 0) {
         if (parseNativeNotify(doc)) {
             m_listener->onJobReceived(this, m_job, doc);
         }
@@ -1247,8 +1311,11 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
             const bool duplicateCapabilityError = id == 1
                 && isUnsupportedAlgoError(message)
                 && !g_capabilityErrorLog.allows(Chrono::steadyMSecs(), capabilityErrorKey(m_pool, message));
+            const bool duplicatePoolError = id == 1
+                && isNoBlockTemplateError(message)
+                && !g_poolErrorLog.allows(Chrono::steadyMSecs(), poolErrorKey(m_pool, "response", message));
 
-            if (!duplicateCapabilityError) {
+            if (!duplicateCapabilityError && !duplicatePoolError) {
                 LOG_ERR("%s " RED("error: ") RED_BOLD("\"%s\"") RED(", code: ") RED_BOLD("%d"), tag(), logText(message).c_str(), Json::getInt(error, "code"));
             }
         }
@@ -1284,6 +1351,23 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
                 sendGetjob();
             }
 
+            return;
+        }
+
+        // Pearl's login dialect acknowledges authorization with a boolean and sends work in a
+        // following object-form mining.notify. Keep an internal client ID; Pearl submits do not
+        // place it on the wire.
+        if (m_loginInFlight && m_pearlLogin && result.IsBool()) {
+            m_loginInFlight = false;
+            if (!result.GetBool()) {
+                close("login rejected");
+                return;
+            }
+
+            setRpcId("pearlhash");
+            m_failures = 0;
+            m_getjobInFlight = false;
+            m_listener->onLoginSuccess(this);
             return;
         }
 
@@ -1354,11 +1438,15 @@ void xmrig::Client::read(ssize_t nread, const uv_buf_t *buf)
 {
     const auto size = static_cast<size_t>(nread);
     if (nread < 0) {
-        if (!isQuiet()) {
-            LOG_ERR("%s " RED("read error: ") RED_BOLD("\"%s\""), tag(), uv_strerror(static_cast<int>(nread)));
+        const char *error = uv_strerror(static_cast<int>(nread));
+        const bool duplicateEof = strcmp(error, "end of file") == 0
+            && !g_poolErrorLog.allows(Chrono::steadyMSecs(), poolErrorKey(m_pool, "read", error));
+
+        if (!isQuiet() && !duplicateEof) {
+            LOG_ERR("%s " RED("read error: ") RED_BOLD("\"%s\""), tag(), error);
         }
 
-        close(uv_strerror(static_cast<int>(nread)));
+        close(error);
         return;
     }
 

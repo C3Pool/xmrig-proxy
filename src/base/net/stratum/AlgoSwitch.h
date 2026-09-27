@@ -35,6 +35,7 @@ class AlgoSwitch
 public:
     AlgoSwitch();
 
+    bool requiresPearlLogin(const Miner *miner) const;
     bool tryMiner(const Miner *miner, int upstreamCount) const;
     rapidjson::Value algoPerfsToJSON(rapidjson::Document &doc) const;
     rapidjson::Value algosToJSON(rapidjson::Document &doc) const;

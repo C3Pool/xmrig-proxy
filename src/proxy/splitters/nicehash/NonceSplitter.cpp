@@ -23,6 +23,7 @@
  */
 
 #include "proxy/splitters/nicehash/NonceSplitter.h"
+#include "3rdparty/rapidjson/document.h"
 #include "base/io/log/Log.h"
 #include "base/tools/Chrono.h"
 #include "core/config/Config.h"
@@ -78,13 +79,19 @@ xmrig::Upstreams xmrig::NonceSplitter::upstreams() const
 
 void xmrig::NonceSplitter::connect()
 {
+    createMapper()->start();
+}
+
+
+xmrig::NonceMapper *xmrig::NonceSplitter::createMapper()
+{
     auto *upstream = new NonceMapper(m_upstreams.size(), m_controller);
     /* MoneroOcean change: begin Apply configured algo-perf grouping tolerance to new MoneroOcean upstream groups. */
     upstream->setAlgoPerfSameThreshold(m_controller->config()->algoPerfSameThreshold());
     /* MoneroOcean change: end */
     m_upstreams.push_back(upstream);
 
-    upstream->start();
+    return upstream;
 }
 
 
@@ -200,10 +207,15 @@ bool xmrig::NonceSplitter::assign(Miner *miner)
         /* MoneroOcean change: end */
     }
 
-    connect();
-    NonceMapper *mapper = m_upstreams.back();
+    NonceMapper *mapper = createMapper();
+    if (!mapper->add(miner)) {
+        m_upstreams.pop_back();
+        delete mapper;
+        return false;
+    }
 
-    return mapper->tryMiner(miner, m_upstreams.size()) && mapper->add(miner);
+    mapper->start();
+    return true;
 }
 
 
@@ -211,6 +223,16 @@ void xmrig::NonceSplitter::login(LoginEvent *event)
 {
     if (event->miner()->routeId() != -1) {
         return;
+    }
+
+    // Plain C29 clients use JSON login without capability extensions. Only an
+    // explicit C29 endpoint can infer that dialect; advertised capabilities win.
+    const auto &pools = m_controller->config()->pools().data();
+    if (!event->params.HasMember("algo") && !event->params.HasMember("algo-perf") &&
+        !pools.empty() && pools.front().algorithm() == Algorithm::C29) {
+        event->miner()->setExtension(Miner::EXT_NATIVE, true);
+        event->miner()->setExtension(Miner::EXT_BOOL_SUBMIT, true);
+        event->miner()->setNativeAlgorithm(pools.front().algorithm());
     }
 
     if (event->miner()->mapperId() >= 0) {
